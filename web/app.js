@@ -298,6 +298,15 @@ function openSettings() {
   settingsDialog.showModal();
 }
 
+// Pasting a Groq key fills in Groq's endpoint and Whisper model.
+const GROQ = { baseUrl: 'https://api.groq.com/openai/v1', model: 'whisper-large-v3-turbo' };
+form.apiKey.addEventListener('input', () => {
+  if (form.apiKey.value.trim().startsWith('gsk_') && form.baseUrl.value.trim() === DEFAULTS.baseUrl) {
+    form.baseUrl.value = GROQ.baseUrl;
+    if (form.model.value.trim() === DEFAULTS.model) form.model.value = GROQ.model;
+  }
+});
+
 $('#settings-btn').addEventListener('click', openSettings);
 settingsDialog.addEventListener('close', () => {
   if (settingsDialog.returnValue !== 'save') return;

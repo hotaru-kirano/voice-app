@@ -142,6 +142,17 @@ function makeWav() {
   await page.click('#prev-btn');
   assert.strictEqual(await text(), 'Kyoto, May. One: set a budget. Two: book flights.');
 
+  // 9. Pasting a Groq key fills in Groq's endpoint and model.
+  await page.evaluate(() => localStorage.setItem('settings', '{}'));
+  await page.reload();
+  await page.click('#settings-btn');
+  assert.strictEqual(await page.inputValue('input[name=baseUrl]'), 'https://api.openai.com/v1');
+  await page.fill('input[name=apiKey]', 'gsk_example');
+  assert.strictEqual(await page.inputValue('input[name=baseUrl]'), 'https://api.groq.com/openai/v1');
+  assert.strictEqual(await page.inputValue('input[name=model]'), 'whisper-large-v3-turbo');
+  await page.click('#settings button[value="save"]');
+  await page.waitForFunction(() => JSON.parse(localStorage.getItem('settings')).baseUrl === 'https://api.groq.com/openai/v1');
+
   assert.deepStrictEqual(errors, []);
   console.log(`PASS (${requests.length} transcription requests)`);
   await browser.close();

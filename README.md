@@ -20,9 +20,10 @@ Progressive Web App, so it installs to your home screen.
 
 1. Open the site in Chrome on Android, then choose **⋮ → Add to Home screen**
    (or **Install app**).
-2. Tap the gear and enter your API key. Change the base URL and model if you're
-   not using OpenAI (for example `https://api.groq.com/openai/v1` with
-   `whisper-large-v3-turbo`).
+2. Tap the gear and paste your API key. A Groq key (`gsk_…`) automatically
+   fills in Groq's endpoint (`https://api.groq.com/openai/v1`) and the
+   `whisper-large-v3-turbo` model. For another provider, set the base URL and
+   model yourself.
 
 ## Behaviour details
 
