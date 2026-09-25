@@ -1,51 +1,43 @@
-# Voice Notes
+# Voice Drafts
 
-A hands-free voice notes app, built as a Progressive Web App (PWA). You talk and
-it writes down what you said. Say **"save note"** when you're done. Speech is
-transcribed by any OpenAI-compatible `/audio/transcriptions` endpoint (OpenAI
-Whisper, Groq, a self-hosted whisper server, …).
+A focused surface for organizing your thoughts out loud.
 
-Plain HTML, CSS and JavaScript: no framework, no build step, no backend.
+1. **Speak.** Tap the mic, say what's on your mind, tap again when you're done.
+2. **Read.** The transcript fills the screen.
+3. **Speak again.** Read it back and say a better version. The new take
+   replaces the old one on the surface.
 
-## Using it
+Repeat until the thought is clear. Earlier versions are kept, so a bad take is
+never a loss. Step through them with the ‹ › arrows at the top, or tap **+** to
+start a new draft on a blank surface.
+
+Speech is transcribed by any OpenAI-compatible `/audio/transcriptions`
+endpoint (OpenAI Whisper, Groq, a self-hosted whisper server, …). The app is
+plain HTML, CSS and JavaScript: no framework, no build step, no backend. It's a
+Progressive Web App, so it installs to your home screen.
+
+## Setup
 
 1. Open the site in Chrome on Android, then choose **⋮ → Add to Home screen**
    (or **Install app**).
 2. Tap the gear and enter your API key. Change the base URL and model if you're
    not using OpenAI (for example `https://api.groq.com/openai/v1` with
    `whisper-large-v3-turbo`).
-3. Tap the mic once and start talking. Each time you pause, what you said is sent
-   off to be transcribed and added to the current note.
 
-Voice commands (said on their own, after a short pause):
+## Behaviour details
 
-| Say | Does |
-|---|---|
-| "save note" / "new note" / "done" | Save the current note and start a fresh one |
-| "…, save note" at the end of a sentence | Add the sentence, then save |
-| "new note, …" at the start | Save the previous note, then start a new one with the rest |
-| "scratch that" / "undo" | Remove the last part you said |
-| "discard note" | Clear the current note |
-| "read back" | Read the current note aloud |
-| "stop listening" | Turn the mic off |
-
-Notes are stored on the device (IndexedDB). Tap a note to edit, copy, share or
-delete it.
-
-## How it works
-
-- `MediaRecorder` records the mic continuously. A simple voice activity detector
-  (it watches the volume level against the background noise) cuts the recording
-  whenever you pause for about 1.2 seconds (you can change this in Settings).
-- Each cut is a complete audio file. It is posted to `{baseUrl}/audio/transcriptions`,
-  with the end of the current note as the `prompt` to help with context.
-- Silence is never sent. Short clips that come back as typical Whisper
-  "hallucinations" (for example "Thank you.") are ignored.
-- The Screen Wake Lock API keeps the phone awake while listening.
-
-**Limits:** the app has to stay open with the screen on while it listens. Your
-API key is stored in the browser's localStorage, which is fine for a personal app
-but not for one you share with other people.
+- The draft stays on screen while you record, so you can read it while you
+  speak the next version.
+- The current draft is sent to the API as the Whisper `prompt`, which helps it
+  keep names and terms spelled the same way between takes.
+- A take only replaces the draft when transcription succeeds and returns text.
+  If it fails, the draft is untouched and **Retry** resends the same recording.
+  Taps shorter than 0.7 s are ignored.
+- The screen stays awake while recording (Screen Wake Lock API).
+- Everything is stored in the browser's localStorage: the versions (the last
+  200) and your API key. That's fine for a personal app, but don't use it this
+  way in an app you share.
+- On a computer, the space bar starts and stops recording.
 
 ## Files
 

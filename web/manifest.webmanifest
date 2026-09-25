@@ -1,7 +1,7 @@
 {
-  "name": "Voice Notes",
-  "short_name": "Voice Notes",
-  "description": "Hands-free voice notes with cloud transcription.",
+  "name": "Voice Drafts",
+  "short_name": "Voice Drafts",
+  "description": "A focused surface for thinking out loud: speak, read, speak again.",
   "start_url": "./",
   "scope": "./",
   "display": "standalone",

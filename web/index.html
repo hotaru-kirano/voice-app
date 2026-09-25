@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <meta name="theme-color" content="#1f6feb">
-  <title>Voice Notes</title>
+  <title>Voice Drafts</title>
   <link rel="manifest" href="manifest.webmanifest">
   <link rel="icon" href="icons/icon.svg" type="image/svg+xml">
   <link rel="apple-touch-icon" href="icons/icon-192.png">
@@ -13,51 +13,41 @@
 </head>
 <body>
   <header class="bar">
-    <h1>Voice Notes</h1>
-    <button id="settings-btn" class="icon-btn" aria-label="Settings">
+    <button id="new-btn" class="icon-btn" aria-label="New draft" title="New draft">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6z"/></svg>
+    </button>
+    <div class="history" id="history">
+      <button id="prev-btn" class="icon-btn" aria-label="Previous version">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15.4 7.4 14 6l-6 6 6 6 1.4-1.4-4.6-4.6z"/></svg>
+      </button>
+      <span id="version" class="muted"></span>
+      <button id="next-btn" class="icon-btn" aria-label="Next version">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8.6 16.6 10 18l6-6-6-6-1.4 1.4 4.6 4.6z"/></svg>
+      </button>
+    </div>
+    <button id="settings-btn" class="icon-btn" aria-label="Settings" title="Settings">
       <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M19.4 13a7.6 7.6 0 0 0 0-2l2.1-1.6-2-3.5-2.5 1a7.3 7.3 0 0 0-1.7-1L15 3.3h-4l-.4 2.6a7.3 7.3 0 0 0-1.7 1l-2.5-1-2 3.5L6.6 11a7.6 7.6 0 0 0 0 2l-2.1 1.6 2 3.5 2.5-1a7.3 7.3 0 0 0 1.7 1l.4 2.6h4l.4-2.6a7.3 7.3 0 0 0 1.7-1l2.5 1 2-3.5zM12 15.5a3.5 3.5 0 1 1 0-7 3.5 3.5 0 0 1 0 7z"/></svg>
     </button>
   </header>
 
-  <main>
-    <section class="recorder">
-      <button id="mic-btn" class="mic" aria-pressed="false" aria-label="Start listening">
-        <span class="ring" id="level-ring"></span>
-        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 14a3 3 0 0 0 3-3V5a3 3 0 0 0-6 0v6a3 3 0 0 0 3 3zm5-3a5 5 0 0 1-10 0H5a7 7 0 0 0 6 6.9V21h2v-3.1A7 7 0 0 0 19 11z"/></svg>
-      </button>
-      <p id="status" class="status" role="status" aria-live="polite">Tap to start listening</p>
-      <button id="retry-btn" class="chip warn" hidden>Retry failed</button>
-    </section>
-
-    <section class="card draft">
-      <div class="card-head">
-        <h2>Current note</h2>
-        <span id="pending" class="muted"></span>
-      </div>
-      <textarea id="draft" rows="4" placeholder="Speak, or type here…"></textarea>
-      <div class="actions">
-        <button id="discard-btn" class="btn ghost">Discard</button>
-        <button id="undo-btn" class="btn ghost">Undo last</button>
-        <button id="save-btn" class="btn primary">Save note</button>
-      </div>
-      <details class="help">
-        <summary>Voice commands</summary>
-        <ul>
-          <li><b>“Save note”</b> or <b>“new note”</b>: save and start a fresh note. You can also end a sentence with “…save note”.</li>
-          <li><b>“Scratch that”</b> or <b>“undo”</b>: remove the last thing you said</li>
-          <li><b>“Discard note”</b>: clear the current note</li>
-          <li><b>“Read back”</b>: read the current note aloud</li>
-          <li><b>“Stop listening”</b>: turn the mic off</li>
-        </ul>
-      </details>
-    </section>
-
-    <section>
-      <h2 class="section-title">Notes <span id="note-count" class="muted"></span></h2>
-      <ul id="notes" class="notes"></ul>
-      <p id="empty" class="muted empty">No notes yet.</p>
-    </section>
+  <main id="surface" class="surface">
+    <p id="text" class="text"></p>
+    <p id="placeholder" class="placeholder">Tap the mic and say what’s on your mind.<br>Read it back, then speak again to replace it with a better version.</p>
   </main>
+
+  <footer class="dock">
+    <p id="status" class="status" role="status" aria-live="polite"></p>
+    <div class="dock-row">
+      <button id="retry-btn" class="side-btn" hidden>Retry</button>
+      <button id="mic-btn" class="mic" aria-pressed="false" aria-label="Speak">
+        <span class="ring"></span>
+        <svg class="icon-mic" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 14a3 3 0 0 0 3-3V5a3 3 0 0 0-6 0v6a3 3 0 0 0 3 3zm5-3a5 5 0 0 1-10 0H5a7 7 0 0 0 6 6.9V21h2v-3.1A7 7 0 0 0 19 11z"/></svg>
+        <svg class="icon-stop" viewBox="0 0 24 24" aria-hidden="true"><rect x="7" y="7" width="10" height="10" rx="2"/></svg>
+        <span class="spinner" aria-hidden="true"></span>
+      </button>
+      <button id="copy-btn" class="side-btn" aria-label="Copy text">Copy</button>
+    </div>
+  </footer>
 
   <dialog id="settings" class="sheet">
     <form method="dialog" id="settings-form">
@@ -74,30 +64,10 @@
       <label>Language <small class="muted">(optional, e.g. en, ja)</small>
         <input name="language" maxlength="8" placeholder="auto-detect">
       </label>
-      <label>Mic sensitivity
-        <input name="sensitivity" type="range" min="1" max="10" step="1">
-      </label>
-      <label>Pause before sending <output id="silence-out"></output>
-        <input name="silenceMs" type="range" min="600" max="3000" step="100">
-      </label>
-      <label class="check"><input name="speak" type="checkbox"> Spoken confirmations</label>
       <p class="muted small">Your key stays in this browser and is only sent to the API URL above.</p>
       <div class="actions">
         <button value="cancel" formnovalidate class="btn ghost">Cancel</button>
         <button value="save" class="btn primary">Save</button>
-      </div>
-    </form>
-  </dialog>
-
-  <dialog id="note-dialog" class="sheet">
-    <form method="dialog">
-      <p id="note-date" class="muted small"></p>
-      <textarea id="note-text" rows="10"></textarea>
-      <div class="actions wrap">
-        <button value="delete" class="btn danger">Delete</button>
-        <button value="copy" class="btn ghost">Copy</button>
-        <button value="share" class="btn ghost" id="share-btn">Share</button>
-        <button value="save" class="btn primary">Done</button>
       </div>
     </form>
   </dialog>

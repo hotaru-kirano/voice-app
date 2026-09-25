@@ -1,5 +1,7 @@
-// Voice Notes: hands-free dictation using an OpenAI-compatible
-// /audio/transcriptions endpoint. No framework, no build step.
+// Voice Drafts: a focused surface for thinking out loud.
+// Speak -> the transcript fills the surface -> read it -> speak again, and the
+// new take replaces it. Earlier versions are kept so a bad take is never a loss.
+// Transcription uses an OpenAI-compatible /audio/transcriptions endpoint.
 
 const $ = (sel) => document.querySelector(sel);
 
@@ -10,166 +12,69 @@ const DEFAULTS = {
   apiKey: '',
   model: 'whisper-1',
   language: '',
-  sensitivity: 5,
-  silenceMs: 1200,
-  speak: true,
 };
 
-function loadSettings() {
+function loadJSON(key, fallback) {
   try {
-    return { ...DEFAULTS, ...JSON.parse(localStorage.getItem('settings') || '{}') };
+    return JSON.parse(localStorage.getItem(key)) ?? fallback;
   } catch {
-    return { ...DEFAULTS };
+    return fallback;
   }
 }
 
-let settings = loadSettings();
+let settings = { ...DEFAULTS, ...loadJSON('settings', {}) };
 
-function saveSettings(next) {
-  settings = { ...settings, ...next };
-  localStorage.setItem('settings', JSON.stringify(settings));
-}
+// ---------- Versions ----------
+// Every take is appended; the surface shows one of them (the newest by default).
 
-// ---------- Storage (IndexedDB) ----------
+const MAX_VERSIONS = 200;
+let versions = loadJSON('versions', []);
+let current = versions.length - 1;
 
-const db = (() => {
-  let opening;
-  const open = () =>
-    (opening ??= new Promise((resolve, reject) => {
-      const req = indexedDB.open('voice-notes', 1);
-      req.onupgradeneeded = () => req.result.createObjectStore('notes', { keyPath: 'id' });
-      req.onsuccess = () => resolve(req.result);
-      req.onerror = () => reject(req.error);
-    }));
-
-  async function run(mode, fn) {
-    const conn = await open();
-    return new Promise((resolve, reject) => {
-      const tx = conn.transaction('notes', mode);
-      const req = fn(tx.objectStore('notes'));
-      tx.oncomplete = () => resolve(req.result);
-      tx.onerror = () => reject(tx.error);
-    });
+function saveVersions() {
+  if (versions.length > MAX_VERSIONS) {
+    current -= versions.length - MAX_VERSIONS;
+    versions = versions.slice(-MAX_VERSIONS);
   }
-
-  return {
-    all: () => run('readonly', (s) => s.getAll()),
-    put: (note) => run('readwrite', (s) => s.put(note)),
-    delete: (id) => run('readwrite', (s) => s.delete(id)),
-  };
-})();
-
-// ---------- Draft ----------
-// The draft is a list of transcribed segments so "scratch that" can remove
-// the last one. Typing in the textarea collapses it into a single segment.
-
-let segments = JSON.parse(localStorage.getItem('draft') || '[]');
-
-const draftEl = $('#draft');
-
-function setSegments(next) {
-  segments = next.filter((s) => s.trim());
-  localStorage.setItem('draft', JSON.stringify(segments));
-  draftEl.value = segments.join(' ');
-  updateDraftButtons();
+  localStorage.setItem('versions', JSON.stringify(versions));
 }
 
-function draftText() {
-  return segments.join(' ').trim();
+function currentText() {
+  return versions[current]?.text ?? '';
 }
 
-function updateDraftButtons() {
-  const empty = !draftText();
-  $('#save-btn').disabled = empty;
-  $('#discard-btn').disabled = empty;
-  $('#undo-btn').disabled = empty;
+function addVersion(text) {
+  versions.push({ text, at: Date.now() });
+  current = versions.length - 1;
+  saveVersions();
+  render({ fresh: true });
 }
 
-draftEl.addEventListener('input', () => {
-  segments = draftEl.value.trim() ? [draftEl.value] : [];
-  localStorage.setItem('draft', JSON.stringify(segments));
-  updateDraftButtons();
-});
+// ---------- Rendering ----------
 
-async function saveDraft() {
-  const text = draftText();
-  if (!text) return false;
-  const now = Date.now();
-  await db.put({ id: crypto.randomUUID(), text, created: now, updated: now });
-  setSegments([]);
-  await renderNotes();
-  return true;
-}
-
-// ---------- Notes list ----------
-
-const dateFmt = new Intl.DateTimeFormat(undefined, { dateStyle: 'medium', timeStyle: 'short' });
-let notesCache = [];
-
-async function renderNotes() {
-  notesCache = (await db.all()).sort((a, b) => b.created - a.created);
-  const list = $('#notes');
-  list.replaceChildren(
-    ...notesCache.map((note) => {
-      const li = document.createElement('li');
-      li.dataset.id = note.id;
-      const text = document.createElement('div');
-      text.className = 'text';
-      text.textContent = note.text;
-      const time = document.createElement('time');
-      time.dateTime = new Date(note.created).toISOString();
-      time.textContent = dateFmt.format(note.created);
-      li.append(text, time);
-      return li;
-    }),
-  );
-  $('#empty').hidden = notesCache.length > 0;
-  $('#note-count').textContent = notesCache.length ? `(${notesCache.length})` : '';
-}
-
-let openNote = null;
-const noteDialog = $('#note-dialog');
-
-$('#notes').addEventListener('click', (e) => {
-  const li = e.target.closest('li');
-  if (!li) return;
-  openNote = notesCache.find((n) => n.id === li.dataset.id);
-  if (!openNote) return;
-  $('#note-date').textContent = dateFmt.format(openNote.created);
-  $('#note-text').value = openNote.text;
-  $('#share-btn').hidden = !navigator.share;
-  noteDialog.showModal();
-});
-
-noteDialog.addEventListener('close', async () => {
-  const note = openNote;
-  if (!note) return;
-  const text = $('#note-text').value.trim();
-  const action = noteDialog.returnValue;
-  noteDialog.returnValue = '';
-
-  if (action === 'copy') {
-    await navigator.clipboard.writeText(text).then(() => toast('Copied'), () => toast('Copy failed'));
-  } else if (action === 'share') {
-    navigator.share({ text }).catch(() => {});
-  }
-
-  if (action === 'delete') {
-    if (!confirm('Delete this note?')) return noteDialog.showModal();
-    await db.delete(note.id);
-  } else if (text && text !== note.text) {
-    await db.put({ ...note, text, updated: Date.now() });
-  } else if (!text) {
-    await db.delete(note.id);
-  }
-  openNote = null;
-  renderNotes();
-});
-
-// ---------- UI helpers ----------
-
-const statusEl = $('#status');
+const textEl = $('#text');
 const micBtn = $('#mic-btn');
+const statusEl = $('#status');
+
+function render({ fresh = false } = {}) {
+  const text = currentText();
+  textEl.textContent = text;
+  $('#placeholder').hidden = Boolean(text);
+  $('#copy-btn').disabled = !text;
+
+  if (fresh) {
+    textEl.classList.remove('fresh');
+    void textEl.offsetWidth; // restart the animation
+    textEl.classList.add('fresh');
+    $('#surface').scrollTop = 0;
+  }
+
+  $('#history').hidden = versions.length < 2;
+  $('#version').textContent = `${current + 1} / ${versions.length}`;
+  $('#prev-btn').disabled = current <= 0;
+  $('#next-btn').disabled = current >= versions.length - 1;
+  $('#new-btn').disabled = !text;
+}
 
 function setStatus(text, isError = false) {
   statusEl.textContent = text;
@@ -182,31 +87,10 @@ function toast(text) {
   el.textContent = text;
   el.hidden = false;
   clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => (el.hidden = true), 2200);
+  toastTimer = setTimeout(() => (el.hidden = true), 1800);
 }
 
-function speak(text) {
-  if (!settings.speak || !('speechSynthesis' in window)) return;
-  // Mute the mic while talking so the app doesn't transcribe itself.
-  listener.mute(true);
-  const u = new SpeechSynthesisUtterance(text);
-  let done = false;
-  const finish = () => {
-    if (done) return;
-    done = true;
-    listener.mute(false);
-  };
-  u.onend = finish;
-  u.onerror = finish;
-  // Some Android builds never fire onend, so don't rely on it.
-  setTimeout(finish, 1500 + text.length * 90);
-  speechSynthesis.cancel();
-  speechSynthesis.speak(u);
-}
-
-// ---------- Listener: mic + voice activity detection ----------
-// Records continuously and cuts the recording into a segment whenever speech
-// is followed by a pause. Each segment is a complete audio file.
+// ---------- Recording ----------
 
 function pickMimeType() {
   const types = ['audio/webm;codecs=opus', 'audio/webm', 'audio/mp4', 'audio/ogg;codecs=opus'];
@@ -220,116 +104,78 @@ function extensionFor(mime) {
   return 'webm';
 }
 
-const TICK_MS = 50;
-const MIN_ONSET_MS = 150; // loud this long before it counts as speech
-const MIN_SPEECH_MS = 300; // segments with less speech than this are dropped
-const MAX_SEGMENT_MS = 60_000;
-const IDLE_RESET_MS = 10_000; // throw away recorded silence this often
+const MIN_TAKE_MS = 700;
+let rec = null; // { recorder, stream, ctx, chunks, started, timer }
+let busy = false;
+let failedTake = null;
 
-class Listener {
-  constructor({ onSegment, onLevel, onSpeaking }) {
-    Object.assign(this, { onSegment, onLevel, onSpeaking });
-    this.active = false;
-    this.muted = false;
+async function startRecording() {
+  if (!settings.apiKey && settings.baseUrl === DEFAULTS.baseUrl) {
+    toast('Add your API key first');
+    return openSettings();
   }
 
-  async start() {
-    this.stream = await navigator.mediaDevices.getUserMedia({
+  let stream;
+  try {
+    stream = await navigator.mediaDevices.getUserMedia({
       audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
     });
-    this.ctx = new AudioContext();
-    this.analyser = this.ctx.createAnalyser();
-    this.analyser.fftSize = 1024;
-    this.ctx.createMediaStreamSource(this.stream).connect(this.analyser);
-    this.samples = new Float32Array(this.analyser.fftSize);
-    this.mimeType = pickMimeType();
-    this.floor = 0.002;
-    this.active = true;
-    this.startRecorder();
-    this.timer = setInterval(() => this.tick(), TICK_MS);
+  } catch (err) {
+    return setStatus(`Microphone unavailable: ${err.message}`, true);
   }
 
-  stop() {
-    if (!this.active) return;
-    this.active = false;
-    clearInterval(this.timer);
-    // Keep whatever was being said when the mic was turned off.
-    this.cut(this.speaking && this.speechMs >= MIN_SPEECH_MS);
-    this.stream.getTracks().forEach((t) => t.stop());
-    this.ctx.close();
-    this.onLevel(0);
-    this.onSpeaking(false);
-  }
+  const mimeType = pickMimeType();
+  const recorder = new MediaRecorder(stream, mimeType ? { mimeType } : undefined);
+  const chunks = [];
+  recorder.ondataavailable = (e) => e.data.size && chunks.push(e.data);
+  recorder.start();
 
-  mute(on) {
-    this.muted = on;
-    // Discard audio recorded while muted (it contains our own voice).
-    if (!on && this.active) this.cut(false);
-  }
+  // Level meter for the ring around the button.
+  const ctx = new AudioContext();
+  const analyser = ctx.createAnalyser();
+  analyser.fftSize = 1024;
+  ctx.createMediaStreamSource(stream).connect(analyser);
+  const samples = new Float32Array(analyser.fftSize);
 
-  startRecorder() {
-    const rec = new MediaRecorder(this.stream, this.mimeType ? { mimeType: this.mimeType } : undefined);
-    const chunks = [];
-    rec.ondataavailable = (e) => e.data.size && chunks.push(e.data);
-    rec.onstop = () => {
-      if (rec.keep && chunks.length) {
-        this.onSegment(new Blob(chunks, { type: rec.mimeType || this.mimeType }), rec.speechMs);
-      }
-    };
-    rec.start();
-    this.rec = rec;
-    this.segStart = performance.now();
-    this.speechMs = 0;
-    this.silenceMs = 0;
-    if (this.speaking) this.onSpeaking(false);
-    this.speaking = false;
-  }
-
-  cut(keep) {
-    const rec = this.rec;
-    rec.keep = keep;
-    rec.speechMs = this.speechMs;
-    if (rec.state !== 'inactive') rec.stop();
-    if (this.active) this.startRecorder();
-  }
-
-  tick() {
-    this.analyser.getFloatTimeDomainData(this.samples);
+  const started = performance.now();
+  const timer = setInterval(() => {
+    analyser.getFloatTimeDomainData(samples);
     let sum = 0;
-    for (const v of this.samples) sum += v * v;
-    const rms = Math.sqrt(sum / this.samples.length);
+    for (const v of samples) sum += v * v;
+    micBtn.style.setProperty('--level', Math.min(Math.sqrt(sum / samples.length) * 8, 1).toFixed(3));
+    setStatus(`Recording ${formatDuration(performance.now() - started)}`);
+  }, 60);
 
-    // Threshold follows the background noise level; sensitivity sets the floor.
-    const minLevel = 0.004 * 2 ** ((5 - settings.sensitivity) / 2);
-    const threshold = Math.max(this.floor * 3, minLevel);
-    const loud = rms > threshold;
-    this.floor += (rms - this.floor) * (loud ? 0.002 : 0.05);
-    this.onLevel(Math.min(rms / threshold / 3, 1));
+  rec = { recorder, stream, ctx, chunks, started, timer };
+  micBtn.setAttribute('aria-pressed', 'true');
+  micBtn.setAttribute('aria-label', 'Finish speaking');
+  setStatus('Recording 0:00');
+  keepAwake(true);
+}
 
-    if (this.muted) return;
+async function stopRecording() {
+  const { recorder, stream, ctx, chunks, started, timer } = rec;
+  rec = null;
+  clearInterval(timer);
+  const stopped = new Promise((resolve) => (recorder.onstop = resolve));
+  recorder.stop();
+  await stopped;
+  stream.getTracks().forEach((t) => t.stop());
+  ctx.close();
+  keepAwake(false);
+  micBtn.setAttribute('aria-pressed', 'false');
+  micBtn.setAttribute('aria-label', 'Speak');
+  micBtn.style.setProperty('--level', 0);
 
-    if (loud) {
-      this.speechMs += TICK_MS;
-      this.silenceMs = 0;
-      if (!this.speaking && this.speechMs >= MIN_ONSET_MS) {
-        this.speaking = true;
-        this.onSpeaking(true);
-      }
-    } else if (this.speaking) {
-      this.silenceMs += TICK_MS;
-    } else {
-      this.speechMs = 0;
-    }
-
-    const age = performance.now() - this.segStart;
-    if (this.speaking && this.silenceMs >= settings.silenceMs) {
-      this.cut(this.speechMs >= MIN_SPEECH_MS);
-    } else if (this.speaking && age >= MAX_SEGMENT_MS) {
-      this.cut(true);
-    } else if (!this.speaking && !loud && age >= IDLE_RESET_MS) {
-      this.cut(false);
-    }
+  if (performance.now() - started < MIN_TAKE_MS || !chunks.length) {
+    return setStatus('Too short. Tap and speak, then tap again when done.');
   }
+  await transcribeTake(new Blob(chunks, { type: recorder.mimeType }));
+}
+
+function formatDuration(ms) {
+  const s = Math.floor(ms / 1000);
+  return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
 }
 
 // ---------- Transcription ----------
@@ -340,8 +186,8 @@ async function transcribe(blob) {
   form.append('model', settings.model);
   form.append('response_format', 'json');
   if (settings.language) form.append('language', settings.language);
-  // The tail of the current note helps with continuity and spelling.
-  const context = draftText().slice(-200);
+  // The draft you're revising helps with names, terms and spelling.
+  const context = currentText().slice(-600);
   if (context) form.append('prompt', context);
 
   const headers = settings.apiKey ? { Authorization: `Bearer ${settings.apiKey}` } : {};
@@ -357,120 +203,35 @@ async function transcribe(blob) {
   return (data.text || '').trim();
 }
 
-// Whisper tends to invent these on near-silent audio.
-const HALLUCINATIONS = new Set(['you', 'thank you', 'thanks for watching', 'thank you for watching', 'bye', 'thank you very much']);
-
-let queue = Promise.resolve();
-let pending = 0;
-const failed = [];
-
-function updatePending() {
-  $('#pending').textContent = pending ? `Transcribing ${pending}…` : '';
-  $('#retry-btn').hidden = failed.length === 0;
-  $('#retry-btn').textContent = `Retry ${failed.length} failed`;
-}
-
-function enqueue(blob, speechMs) {
-  pending++;
-  updatePending();
-  queue = queue
-    .then(() => handleSegment(blob, speechMs))
-    .catch((err) => {
-      failed.push({ blob, speechMs });
-      setStatus(`Transcription failed: ${err.message}`, true);
-    })
-    .finally(() => {
-      pending--;
-      updatePending();
-    });
-}
-
-$('#retry-btn').addEventListener('click', () => {
-  const items = failed.splice(0);
-  items.forEach(({ blob, speechMs }) => enqueue(blob, speechMs));
-});
-
-async function handleSegment(blob, speechMs) {
-  const text = await transcribe(blob);
-  const norm = normalize(text);
-  if (!norm) return;
-  if (speechMs < 1500 && HALLUCINATIONS.has(norm)) return;
-  await applyUtterance(text, norm);
-  if (listener.active) setStatus('Listening…');
-}
-
-// ---------- Voice commands ----------
-
-function normalize(text) {
-  return text.toLowerCase().replace(/[^\p{L}\p{N}' ]+/gu, ' ').replace(/\s+/g, ' ').trim();
-}
-
-const WHOLE_COMMANDS = [
-  [/^(save|save (the )?note|save it|new note|next note|done|note done)$/, 'save'],
-  [/^(scratch that|undo( that)?|delete (that|last)|remove (that|last))$/, 'undo'],
-  [/^(discard|discard (the )?note|cancel (the )?note|clear (the )?note)$/, 'discard'],
-  [/^(read (it )?back|read (the )?note)$/, 'read'],
-  [/^(stop|stop listening|stop recording)$/, 'stop'],
-];
-const TRAILING_SAVE = /[\s,.;:!?-]*\b(save (the )?note|note done)[\s.!?]*$/i;
-const LEADING_NEW = /^\s*new note\b[\s,.;:!?-]*/i;
-
-async function applyUtterance(text, norm) {
-  const command = WHOLE_COMMANDS.find(([re]) => re.test(norm))?.[1];
-  if (command) return runCommand(command);
-
-  if (LEADING_NEW.test(text)) {
-    await runCommand('save');
-    text = text.replace(LEADING_NEW, '');
-  }
-  if (TRAILING_SAVE.test(text)) {
-    setSegments([...segments, text.replace(TRAILING_SAVE, '')]);
-    return runCommand('save');
-  }
-  setSegments([...segments, text]);
-}
-
-async function runCommand(command) {
-  switch (command) {
-    case 'save':
-      if (await saveDraft()) {
-        toast('Note saved');
-        speak('Saved');
-      }
-      break;
-    case 'undo':
-      if (segments.length) {
-        setSegments(segments.slice(0, -1));
-        toast('Removed last part');
-        speak('Removed');
-      }
-      break;
-    case 'discard':
-      if (draftText()) {
-        setSegments([]);
-        toast('Note discarded');
-        speak('Discarded');
-      }
-      break;
-    case 'read':
-      speak(draftText() || 'The note is empty');
-      break;
-    case 'stop':
-      stopListening();
-      break;
+async function transcribeTake(blob) {
+  setBusy(true);
+  setStatus('Transcribing…');
+  try {
+    const text = await transcribe(blob);
+    failedTake = null;
+    if (text) {
+      addVersion(text);
+      setStatus('');
+    } else {
+      setStatus('Didn’t catch anything. Your draft is unchanged.');
+    }
+  } catch (err) {
+    failedTake = blob;
+    setStatus(`Transcription failed: ${err.message}`, true);
+  } finally {
+    $('#retry-btn').hidden = !failedTake;
+    setBusy(false);
   }
 }
 
-// ---------- Wiring ----------
+function setBusy(on) {
+  busy = on;
+  micBtn.classList.toggle('busy', on);
+  micBtn.disabled = on;
+  $('#surface').classList.toggle('busy', on);
+}
 
-const listener = new Listener({
-  onSegment: (blob, speechMs) => enqueue(blob, speechMs),
-  onLevel: (level) => micBtn.style.setProperty('--level', level.toFixed(3)),
-  onSpeaking: (on) => {
-    micBtn.classList.toggle('speaking', on);
-    if (listener.active) setStatus(on ? 'Hearing you…' : 'Listening…');
-  },
-});
+// ---------- Wake lock ----------
 
 let wakeLock = null;
 async function keepAwake(on) {
@@ -481,79 +242,77 @@ async function keepAwake(on) {
   if (!on) wakeLock = null;
 }
 document.addEventListener('visibilitychange', () => {
-  if (document.visibilityState === 'visible' && listener.active) keepAwake(true);
+  if (document.visibilityState === 'visible' && rec) keepAwake(true);
 });
 
-async function startListening() {
-  if (!settings.apiKey && settings.baseUrl === DEFAULTS.baseUrl) {
-    toast('Add your API key first');
-    return openSettings();
+// ---------- Wiring ----------
+
+function toggleMic() {
+  if (busy) return;
+  if (rec) stopRecording();
+  else startRecording();
+}
+
+micBtn.addEventListener('click', toggleMic);
+document.addEventListener('keydown', (e) => {
+  if (e.code === 'Space' && !e.repeat && !document.querySelector('dialog[open]')) {
+    e.preventDefault();
+    toggleMic();
   }
+});
+
+$('#retry-btn').addEventListener('click', () => failedTake && !busy && transcribeTake(failedTake));
+
+$('#copy-btn').addEventListener('click', async () => {
   try {
-    await listener.start();
-  } catch (err) {
-    setStatus(`Microphone unavailable: ${err.message}`, true);
-    return;
+    await navigator.clipboard.writeText(currentText());
+    toast('Copied');
+  } catch {
+    toast('Copy failed');
   }
-  micBtn.setAttribute('aria-pressed', 'true');
-  micBtn.setAttribute('aria-label', 'Stop listening');
-  setStatus('Listening…');
-  keepAwake(true);
-}
+});
 
-function stopListening() {
-  listener.stop();
-  micBtn.setAttribute('aria-pressed', 'false');
-  micBtn.setAttribute('aria-label', 'Start listening');
-  setStatus('Tap to start listening');
-  keepAwake(false);
-}
+$('#new-btn').addEventListener('click', () => {
+  if (!currentText()) return;
+  addVersion('');
+  toast('New draft. Earlier versions are still in history');
+});
 
-micBtn.addEventListener('click', () => (listener.active ? stopListening() : startListening()));
-$('#save-btn').addEventListener('click', () => runCommand('save'));
-$('#undo-btn').addEventListener('click', () => runCommand('undo'));
-$('#discard-btn').addEventListener('click', () => {
-  if (confirm('Discard the current note?')) setSegments([]);
+$('#prev-btn').addEventListener('click', () => {
+  if (current > 0) current--;
+  render();
+});
+$('#next-btn').addEventListener('click', () => {
+  if (current < versions.length - 1) current++;
+  render();
 });
 
 // Settings dialog
 const settingsDialog = $('#settings');
 const form = $('#settings-form');
 
-function updateSilenceLabel() {
-  $('#silence-out').textContent = `(${(form.silenceMs.value / 1000).toFixed(1)}s)`;
-}
-form.silenceMs.addEventListener('input', updateSilenceLabel);
-
 function openSettings() {
   for (const [key, value] of Object.entries(settings)) {
-    const input = form.elements[key];
-    if (!input) continue;
-    if (input.type === 'checkbox') input.checked = value;
-    else input.value = value;
+    if (form.elements[key]) form.elements[key].value = value;
   }
-  updateSilenceLabel();
   settingsDialog.showModal();
 }
 
 $('#settings-btn').addEventListener('click', openSettings);
 settingsDialog.addEventListener('close', () => {
   if (settingsDialog.returnValue !== 'save') return;
-  saveSettings({
+  settings = {
     baseUrl: form.baseUrl.value.trim() || DEFAULTS.baseUrl,
     apiKey: form.apiKey.value.trim(),
     model: form.model.value.trim() || DEFAULTS.model,
     language: form.language.value.trim(),
-    sensitivity: Number(form.sensitivity.value),
-    silenceMs: Number(form.silenceMs.value),
-    speak: form.speak.checked,
-  });
+  };
+  localStorage.setItem('settings', JSON.stringify(settings));
   toast('Settings saved');
 });
 
 // Init
-setSegments(segments);
-renderNotes();
+render();
 
 if ('serviceWorker' in navigator && location.protocol === 'https:') {
   navigator.serviceWorker.register('sw.js').catch(() => {});

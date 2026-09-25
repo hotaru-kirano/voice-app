@@ -1,7 +1,7 @@
-// End-to-end test: feeds synthetic "speech" into Chromium's fake microphone,
-// mocks the transcription API, and checks that voice commands create notes.
+// End-to-end test: records from Chromium's fake microphone, mocks the
+// transcription API, and checks the speak -> read -> speak-again loop.
 //
-// Run: NODE_PATH=$(npm root -g) node tests/e2e.cjs   (needs `playwright` installed)
+// Run: node tests/e2e.cjs   (needs `playwright` installed)
 
 const { chromium } = require('playwright');
 const http = require('http');
@@ -23,28 +23,21 @@ function serve() {
   return new Promise((r) => server.listen(0, () => r(server)));
 }
 
-// 16 kHz mono WAV: silence, a burst of "speech", silence, a second burst, silence.
+// A few seconds of a voiced tone, looped by Chromium as the fake mic.
 function makeWav() {
   const rate = 16000;
-  const pattern = [[1.5, 0], [1.6, 1], [2.2, 0], [1.0, 1], [3.0, 0]];
-  const total = pattern.reduce((s, [d]) => s + d, 0);
-  const data = Buffer.alloc(Math.round(total * rate) * 2);
-  let i = 0;
-  for (const [dur, on] of pattern) {
-    for (let n = 0; n < dur * rate; n++, i++) {
-      const t = n / rate;
-      // Voiced harmonics with a syllable-rate envelope, so noise suppression keeps it.
-      const env = on ? 0.5 + 0.5 * Math.sin(2 * Math.PI * 4 * t) : 0;
-      const s = env * 0.35 * (Math.sin(2 * Math.PI * 180 * t) + 0.6 * Math.sin(2 * Math.PI * 360 * t) + 0.3 * Math.sin(2 * Math.PI * 720 * t)) / 1.9;
-      data.writeInt16LE(Math.round(s * 32767), i * 2);
-    }
+  const data = Buffer.alloc(rate * 3 * 2);
+  for (let n = 0; n < rate * 3; n++) {
+    const t = n / rate;
+    const s = 0.3 * (0.5 + 0.5 * Math.sin(2 * Math.PI * 4 * t)) * Math.sin(2 * Math.PI * 200 * t);
+    data.writeInt16LE(Math.round(s * 32767), n * 2);
   }
   const h = Buffer.alloc(44);
   h.write('RIFF', 0); h.writeUInt32LE(36 + data.length, 4); h.write('WAVE', 8);
   h.write('fmt ', 12); h.writeUInt32LE(16, 16); h.writeUInt16LE(1, 20); h.writeUInt16LE(1, 22);
   h.writeUInt32LE(rate, 24); h.writeUInt32LE(rate * 2, 28); h.writeUInt16LE(2, 32); h.writeUInt16LE(16, 34);
   h.write('data', 36); h.writeUInt32LE(data.length, 40);
-  const file = path.join(os.tmpdir(), 'voice-notes-test.wav');
+  const file = path.join(os.tmpdir(), 'voice-drafts-test.wav');
   fs.writeFileSync(file, Buffer.concat([h, data]));
   return file;
 }
@@ -53,22 +46,25 @@ function makeWav() {
   const server = await serve();
   const url = `http://localhost:${server.address().port}/`;
   const browser = await chromium.launch({
-    args: ['--use-fake-ui-for-media-stream', '--use-fake-device-for-media-stream', `--use-file-for-fake-audio-capture=${makeWav()}`, '--autoplay-policy=no-user-gesture-required'],
+    args: ['--use-fake-ui-for-media-stream', '--use-fake-device-for-media-stream', `--use-file-for-fake-audio-capture=${makeWav()}`],
   });
-  const context = await browser.newContext({ permissions: ['microphone'] });
+  const context = await browser.newContext({ permissions: ['microphone', 'clipboard-read', 'clipboard-write'] });
   await context.addInitScript(() => {
     if (!localStorage.getItem('settings')) {
-      localStorage.setItem('settings', JSON.stringify({ apiKey: 'test-key', baseUrl: 'https://api.example.test/v1', model: 'whisper-1', speak: false, silenceMs: 1000 }));
+      localStorage.setItem('settings', JSON.stringify({ apiKey: 'test-key', baseUrl: 'https://api.example.test/v1', model: 'whisper-1' }));
     }
   });
 
-  const replies = ['Buy milk and eggs.', 'Save note.'];
+  // Each API call takes the next scripted reply.
+  const replies = [];
   const requests = [];
   await context.route('https://api.example.test/**', async (route) => {
     const req = route.request();
     requests.push({ url: req.url(), auth: req.headers()['authorization'], body: req.postDataBuffer()?.toString('latin1') || '' });
-    const text = replies[(requests.length - 1) % replies.length];
-    await route.fulfill({ status: 200, contentType: 'application/json', headers: { 'access-control-allow-origin': '*' }, body: JSON.stringify({ text }) });
+    const reply = replies.shift() ?? { text: '' };
+    const headers = { 'access-control-allow-origin': '*' };
+    if (reply.status) return route.fulfill({ status: reply.status, contentType: 'application/json', headers, body: JSON.stringify({ error: { message: 'Server exploded' } }) });
+    await route.fulfill({ status: 200, contentType: 'application/json', headers, body: JSON.stringify({ text: reply.text }) });
   });
 
   const page = await context.newPage();
@@ -76,34 +72,75 @@ function makeWav() {
   page.on('pageerror', (e) => errors.push(e.message));
   await page.goto(url);
 
-  await page.click('#mic-btn');
-  await page.waitForSelector('#mic-btn[aria-pressed="true"]');
+  const text = () => page.textContent('#text');
+  async function take(ms = 1200) {
+    await page.click('#mic-btn');
+    await page.waitForSelector('#mic-btn[aria-pressed="true"]');
+    await page.waitForTimeout(ms);
+    await page.click('#mic-btn');
+    await page.waitForSelector('#mic-btn:not(.busy)[aria-pressed="false"]');
+  }
 
-  // The first burst becomes draft text; the second ("Save note.") saves it.
-  await page.waitForSelector('#notes li', { timeout: 20000 });
-  const noteText = await page.textContent('#notes li .text');
-  assert.strictEqual(noteText, 'Buy milk and eggs.');
-  assert.strictEqual(await page.inputValue('#draft'), '');
+  assert.ok(await page.isVisible('#placeholder'));
 
-  const first = requests[0];
-  assert.strictEqual(first.url, 'https://api.example.test/v1/audio/transcriptions');
-  assert.strictEqual(first.auth, 'Bearer test-key');
-  assert.match(first.body, /name="model"\r\n\r\nwhisper-1/);
-  assert.match(first.body, /filename="speech\.(webm|ogg|m4a)"/);
+  // 1. First take fills the surface.
+  replies.push({ text: 'I want to plan a trip, maybe Kyoto, not sure when.' });
+  await take();
+  assert.strictEqual(await text(), 'I want to plan a trip, maybe Kyoto, not sure when.');
+  assert.ok(!(await page.isVisible('#placeholder')));
+  assert.strictEqual(requests[0].url, 'https://api.example.test/v1/audio/transcriptions');
+  assert.strictEqual(requests[0].auth, 'Bearer test-key');
+  assert.match(requests[0].body, /name="model"\r\n\r\nwhisper-1/);
+  assert.match(requests[0].body, /filename="speech\.(webm|ogg|m4a)"/);
+  assert.doesNotMatch(requests[0].body, /name="prompt"/);
 
-  await page.click('#mic-btn');
-  await page.waitForSelector('#mic-btn[aria-pressed="false"]');
+  // 2. Speaking again replaces it, and the previous draft is sent as context.
+  replies.push({ text: 'Trip to Kyoto in May. Budget first, then book flights.' });
+  await take();
+  assert.strictEqual(await text(), 'Trip to Kyoto in May. Budget first, then book flights.');
+  assert.match(requests[1].body, /name="prompt"\r\n\r\nI want to plan a trip, maybe Kyoto/);
+  assert.strictEqual(await page.textContent('#version'), '2 / 2');
 
-  // Notes survive a reload (IndexedDB).
+  // 3. A failed transcription leaves the draft alone and can be retried.
+  replies.push({ status: 500 });
+  await take();
+  assert.strictEqual(await text(), 'Trip to Kyoto in May. Budget first, then book flights.');
+  assert.match(await page.textContent('#status'), /failed: 500 Server exploded/);
+  assert.ok(await page.isVisible('#retry-btn'));
+  replies.push({ text: 'Kyoto, May. One: set a budget. Two: book flights.' });
+  await page.click('#retry-btn');
+  await page.waitForFunction(() => document.querySelector('#text').textContent.startsWith('Kyoto, May.'));
+  assert.ok(!(await page.isVisible('#retry-btn')));
+
+  // 4. An empty transcription or a too-short tap changes nothing.
+  replies.push({ text: '' });
+  await take();
+  assert.strictEqual(await text(), 'Kyoto, May. One: set a budget. Two: book flights.');
+  const before = requests.length;
+  await take(100);
+  assert.strictEqual(requests.length, before);
+  assert.match(await page.textContent('#status'), /Too short/);
+
+  // 5. History: step back, then forward.
+  assert.strictEqual(await page.textContent('#version'), '3 / 3');
+  await page.click('#prev-btn');
+  assert.strictEqual(await text(), 'Trip to Kyoto in May. Budget first, then book flights.');
+  await page.click('#next-btn');
+
+  // 6. Copy.
+  await page.click('#copy-btn');
+  assert.strictEqual(await page.evaluate(() => navigator.clipboard.readText()), 'Kyoto, May. One: set a budget. Two: book flights.');
+
+  // 7. Survives a reload.
   await page.reload();
-  await page.waitForSelector('#notes li');
-  assert.strictEqual(await page.locator('#notes li').count(), 1);
+  assert.strictEqual(await text(), 'Kyoto, May. One: set a budget. Two: book flights.');
 
-  // Edit a note through the dialog.
-  await page.click('#notes li');
-  await page.fill('#note-text', 'Buy milk, eggs and bread.');
-  await page.click('#note-dialog button[value="save"]');
-  await page.waitForFunction(() => document.querySelector('#notes li .text')?.textContent === 'Buy milk, eggs and bread.');
+  // 8. New draft clears the surface; history is kept.
+  await page.click('#new-btn');
+  assert.strictEqual(await text(), '');
+  assert.ok(await page.isVisible('#placeholder'));
+  await page.click('#prev-btn');
+  assert.strictEqual(await text(), 'Kyoto, May. One: set a budget. Two: book flights.');
 
   assert.deepStrictEqual(errors, []);
   console.log(`PASS (${requests.length} transcription requests)`);

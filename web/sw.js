@@ -1,6 +1,6 @@
 // Network-first for the app's own files, so updates show up on the next
 // reload; falls back to the cache when offline. API calls are not touched.
-const CACHE = 'voice-notes-v1';
+const CACHE = 'voice-drafts-v2';
 const ASSETS = [
   './',
   'index.html',
