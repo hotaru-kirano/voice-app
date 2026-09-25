@@ -1,0 +1,4 @@
+# Netlify: deploy the static app as-is, no build step.
+[build]
+  publish = "web"
+  command = ""

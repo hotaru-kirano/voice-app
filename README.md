@@ -70,7 +70,12 @@ node tests/e2e.cjs
 
 ## Deploying
 
-`.github/workflows/pages.yml` runs the test on every push and deploys `web/` to
-GitHub Pages from the default branch. Turn it on once in **Settings → Pages →
-Source: GitHub Actions**. Pages on a private repo needs a paid GitHub plan.
-Otherwise, drag the `web/` folder onto Netlify Drop or Cloudflare Pages.
+**Private repo (free): Netlify.** Sign in at app.netlify.com with GitHub, then
+choose **Add new site → Import an existing project → GitHub** and pick this repo.
+`netlify.toml` already sets the publish folder to `web/`, so there's nothing to
+configure. Netlify redeploys on every push.
+
+**Public repo: GitHub Pages.** `.github/workflows/pages.yml` runs the test on
+every push, and for a public repo it also deploys `web/` to GitHub Pages from
+the default branch. Turn it on once in **Settings → Pages → Source: GitHub
+Actions**.
