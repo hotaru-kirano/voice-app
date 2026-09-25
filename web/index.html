@@ -65,6 +65,29 @@
         <input name="language" maxlength="8" placeholder="auto-detect">
       </label>
       <p class="muted small">Your key stays in this browser and is only sent to the API URL above.</p>
+
+      <fieldset class="offline">
+        <legend>Offline (on-device)</legend>
+        <label>Transcribe with
+          <select name="engine">
+            <option value="auto">Cloud, or on-device when offline</option>
+            <option value="local">Always on-device</option>
+            <option value="cloud">Always cloud</option>
+          </select>
+        </label>
+        <label>On-device processor
+          <select name="device">
+            <option value="auto">GPU if available</option>
+            <option value="cpu">CPU only</option>
+          </select>
+        </label>
+        <div class="model-row">
+          <p id="model-status" class="muted small"></p>
+          <button type="button" id="model-btn" class="btn">Download</button>
+        </div>
+        <progress id="model-progress" hidden></progress>
+        <p class="muted small">Moonshine v2 Small, English only. Runs entirely on your phone.</p>
+      </fieldset>
       <div class="actions">
         <button value="cancel" formnovalidate class="btn ghost">Cancel</button>
         <button value="save" class="btn primary">Save</button>

@@ -3,6 +3,8 @@
 // new take replaces it. Earlier versions are kept so a bad take is never a loss.
 // Transcription uses an OpenAI-compatible /audio/transcriptions endpoint.
 
+import * as Local from './local-stt.js';
+
 const $ = (sel) => document.querySelector(sel);
 
 // ---------- Settings ----------
@@ -12,6 +14,8 @@ const DEFAULTS = {
   apiKey: '',
   model: 'whisper-1',
   language: '',
+  engine: 'auto', // auto: cloud, on-device when offline | local | cloud
+  device: 'auto', // on-device processor: auto (GPU if available) | cpu
 };
 
 function loadJSON(key, fallback) {
@@ -113,20 +117,41 @@ function extensionFor(mime) {
 }
 
 const MIN_TAKE_MS = 700;
-let rec = null; // { recorder, stream, ctx, chunks, started, timer }
+let rec = null;
 let busy = false;
 let failedTake = null;
 
+function cloudConfigured() {
+  return Boolean(settings.apiKey) || settings.baseUrl !== DEFAULTS.baseUrl;
+}
+
+// Picks cloud or on-device for a take, or explains why neither works.
+function chooseMode() {
+  const local = Local.isDownloaded(settings.device);
+  if (settings.engine === 'local') return local ? 'local' : 'need-model';
+  if (settings.engine === 'cloud') return cloudConfigured() ? 'cloud' : 'need-key';
+  if (local && (!navigator.onLine || !cloudConfigured())) return 'local';
+  return cloudConfigured() ? 'cloud' : 'need-key';
+}
+
 async function startRecording() {
-  if (!settings.apiKey && settings.baseUrl === DEFAULTS.baseUrl) {
-    toast('Add your API key first');
+  const mode = chooseMode();
+  if (mode === 'need-key') {
+    toast('Add your API key, or download the offline model');
+    return openSettings();
+  }
+  if (mode === 'need-model') {
+    toast('Download the offline model first');
     return openSettings();
   }
 
   let stream;
   try {
+    // The browser's noise suppression helps cloud models but garbles audio for
+    // the on-device model, which was trained on unprocessed speech.
+    const clean = mode !== 'local';
     stream = await navigator.mediaDevices.getUserMedia({
-      audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
+      audio: { echoCancellation: clean, noiseSuppression: clean, autoGainControl: true },
     });
   } catch (err) {
     return setStatus(`Microphone unavailable: ${err.message}`, true);
@@ -138,12 +163,31 @@ async function startRecording() {
   recorder.ondataavailable = (e) => e.data.size && chunks.push(e.data);
   recorder.start();
 
-  // Level meter for the ring around the button.
-  const ctx = new AudioContext();
+  // 16 kHz audio graph: level meter, plus raw samples for on-device mode.
+  const ctx = new AudioContext({ sampleRate: Local.SAMPLE_RATE });
+  const source = ctx.createMediaStreamSource(stream);
   const analyser = ctx.createAnalyser();
   analyser.fftSize = 1024;
-  ctx.createMediaStreamSource(stream).connect(analyser);
+  source.connect(analyser);
   const samples = new Float32Array(analyser.fftSize);
+
+  // On-device: transcribe each piece at a pause while you keep talking.
+  const pieces = [];
+  let chunker = null;
+  if (mode === 'local') {
+    Local.load(settings.device).catch(() => {}); // warm up during the take
+    chunker = new Local.Chunker((audio) => pieces.push(quiet(Local.transcribe(audio, settings.device))));
+    try {
+      await ctx.audioWorklet.addModule('pcm-worklet.js');
+      const tap = new AudioWorkletNode(ctx, 'pcm-tap');
+      tap.port.onmessage = ({ data }) => chunker.push(data);
+      const mute = ctx.createGain();
+      mute.gain.value = 0;
+      source.connect(tap).connect(mute).connect(ctx.destination);
+    } catch {
+      chunker = null; // fall back to transcribing the whole take at the end
+    }
+  }
 
   const started = performance.now();
   const timer = setInterval(() => {
@@ -151,10 +195,10 @@ async function startRecording() {
     let sum = 0;
     for (const v of samples) sum += v * v;
     micBtn.style.setProperty('--level', Math.min(Math.sqrt(sum / samples.length) * 8, 1).toFixed(3));
-    setStatus(`Recording ${formatDuration(performance.now() - started)}`);
+    setStatus(`Recording ${formatDuration(performance.now() - started)}${mode === 'local' ? ' · on-device' : ''}`);
   }, 60);
 
-  rec = { recorder, stream, ctx, chunks, started, timer };
+  rec = { recorder, stream, ctx, chunks, started, timer, mode, chunker, pieces };
   micBtn.setAttribute('aria-pressed', 'true');
   micBtn.setAttribute('aria-label', 'Finish speaking');
   setStatus('Recording 0:00');
@@ -162,7 +206,7 @@ async function startRecording() {
 }
 
 async function stopRecording() {
-  const { recorder, stream, ctx, chunks, started, timer } = rec;
+  const { recorder, stream, ctx, chunks, started, timer, mode, chunker, pieces } = rec;
   rec = null;
   clearInterval(timer);
   const stopped = new Promise((resolve) => (recorder.onstop = resolve));
@@ -178,7 +222,21 @@ async function stopRecording() {
   if (performance.now() - started < MIN_TAKE_MS || !chunks.length) {
     return setStatus('Too short. Tap and speak, then tap again when done.');
   }
-  await transcribeTake(new Blob(chunks, { type: recorder.mimeType }));
+  const blob = new Blob(chunks, { type: recorder.mimeType });
+  if (chunker) {
+    const rest = chunker.flush();
+    if (rest) pieces.push(quiet(Local.transcribe(rest, settings.device)));
+    await transcribeTake({ blob, mode, pieces });
+  } else {
+    await transcribeTake({ blob, mode });
+  }
+}
+
+// Errors are handled when the pieces are awaited; this just stops the browser
+// reporting them as unhandled in the meantime.
+function quiet(promise) {
+  promise.catch(() => {});
+  return promise;
 }
 
 function formatDuration(ms) {
@@ -211,24 +269,71 @@ async function transcribe(blob) {
   return (data.text || '').trim();
 }
 
-async function transcribeTake(blob) {
+async function transcribeTake(take) {
   setBusy(true);
   setStatus('Transcribing…');
+  const started = performance.now();
   try {
-    const text = await transcribe(blob);
+    const { text, via } = await transcribeWith(take);
     failedTake = null;
+    const secs = ((performance.now() - started) / 1000).toFixed(1);
     if (text) {
       addVersion(text);
-      setStatus('');
+      setStatus(`${via} · ${secs} s`);
     } else {
       setStatus('Didn’t catch anything. Your draft is unchanged.');
     }
   } catch (err) {
-    failedTake = blob;
+    failedTake = take.blob;
     setStatus(`Transcription failed: ${err.message}`, true);
   } finally {
     $('#retry-btn').hidden = !failedTake;
     setBusy(false);
+  }
+}
+
+async function transcribeWith({ blob, mode, pieces }) {
+  if (mode === 'local') {
+    const results = pieces ? await Promise.all(pieces) : await transcribeLocally(blob);
+    return { text: joinPieces(results), via: localLabel(results) };
+  }
+  try {
+    return { text: await transcribe(blob), via: cloudLabel() };
+  } catch (err) {
+    // fetch() throws TypeError when there's no connection at all.
+    if (!(err instanceof TypeError) || !Local.isDownloaded(settings.device)) throw err;
+    const results = await transcribeLocally(blob);
+    return { text: joinPieces(results), via: `${localLabel(results)} (no connection)` };
+  }
+}
+
+async function transcribeLocally(blob) {
+  const pcm = await Local.decodeToPcm(blob);
+  const audio = [];
+  const chunker = new Local.Chunker((a) => audio.push(a));
+  for (let i = 0; i < pcm.length; i += Local.SAMPLE_RATE) chunker.push(pcm.slice(i, i + Local.SAMPLE_RATE));
+  const rest = chunker.flush();
+  if (rest) audio.push(rest);
+  return Promise.all(audio.map((a) => Local.transcribe(a, settings.device)));
+}
+
+function joinPieces(results) {
+  return results.map((r) => r.text).filter(Boolean).join(' ').replace(/\s+/g, ' ').trim();
+}
+
+function localLabel(results) {
+  const dev = results.find((r) => r.device)?.device;
+  return dev ? `On-device · ${dev === 'webgpu' ? 'GPU' : 'CPU'}` : 'On-device';
+}
+
+function cloudLabel() {
+  try {
+    const host = new URL(settings.baseUrl).hostname;
+    if (host.includes('groq')) return 'Groq';
+    if (host.includes('openai')) return 'OpenAI';
+    return host;
+  } catch {
+    return 'Cloud';
   }
 }
 
@@ -269,7 +374,11 @@ document.addEventListener('keydown', (e) => {
   }
 });
 
-$('#retry-btn').addEventListener('click', () => failedTake && !busy && transcribeTake(failedTake));
+$('#retry-btn').addEventListener('click', () => {
+  if (!failedTake || busy) return;
+  const mode = chooseMode();
+  transcribeTake({ blob: failedTake, mode: mode === 'local' ? 'local' : 'cloud' });
+});
 
 $('#copy-btn').addEventListener('click', async () => {
   try {
@@ -303,8 +412,63 @@ function openSettings() {
   for (const [key, value] of Object.entries(settings)) {
     if (form.elements[key]) form.elements[key].value = value;
   }
+  updateModelStatus();
   settingsDialog.showModal();
 }
+
+// ---------- Offline model ----------
+
+const DEVICE_NAMES = { webgpu: 'GPU', wasm: 'CPU' };
+
+function updateModelStatus() {
+  const on = Local.downloadedOn();
+  const wanted = form.device.value;
+  const ready = Local.isDownloaded(wanted);
+  $('#model-status').textContent = ready
+    ? `Downloaded (${on.map((d) => DEVICE_NAMES[d]).join(' + ')}). Works offline.`
+    : 'Not downloaded yet. 180–300 MB, so use Wi‑Fi.';
+  $('#model-btn').textContent = ready ? 'Test' : 'Download';
+}
+
+form.device.addEventListener('change', updateModelStatus);
+
+let removeProgress = null;
+$('#model-btn').addEventListener('click', async () => {
+  const btn = $('#model-btn');
+  const bar = $('#model-progress');
+  btn.disabled = true;
+  bar.hidden = false;
+  bar.removeAttribute('value');
+  $('#model-status').textContent = 'Preparing…';
+  removeProgress?.();
+  removeProgress = Local.onProgress(({ loaded, total }) => {
+    if (!total) return;
+    bar.max = total;
+    bar.value = loaded;
+    $('#model-status').textContent = `Downloading… ${Math.round(loaded / 1e6)} / ${Math.round(total / 1e6)} MB`;
+  });
+  // Ask the browser not to evict the model when storage runs low.
+  navigator.storage?.persist?.().catch(() => {});
+  try {
+    const t = performance.now();
+    const used = await Local.load(form.device.value);
+    updateModelStatus();
+    $('#model-status').textContent += ` Using the ${DEVICE_NAMES[used]}, ready in ${((performance.now() - t) / 1000).toFixed(1)} s.`;
+  } catch (err) {
+    $('#model-status').textContent = `Download failed: ${err.message}`;
+  } finally {
+    removeProgress?.();
+    removeProgress = null;
+    bar.hidden = true;
+    btn.disabled = false;
+  }
+});
+
+// Load the model ahead of time whenever a take would use it.
+function warmUpIfNeeded() {
+  if (chooseMode() === 'local') Local.load(settings.device).catch(() => {});
+}
+window.addEventListener('offline', warmUpIfNeeded);
 
 // Show the Groq endpoint as soon as a Groq key is typed or pasted.
 form.apiKey.addEventListener('input', () => {
@@ -321,14 +485,27 @@ settingsDialog.addEventListener('close', () => {
     apiKey: form.apiKey.value.trim(),
     model: form.model.value.trim() || DEFAULTS.model,
     language: form.language.value.trim(),
+    engine: form.engine.value,
+    device: form.device.value,
   });
   localStorage.setItem('settings', JSON.stringify(settings));
   toast('Settings saved');
+  warmUpIfNeeded();
 });
 
 // Init
 render();
+warmUpIfNeeded();
 
-if ('serviceWorker' in navigator && location.protocol === 'https:') {
+if ('serviceWorker' in navigator && (location.protocol === 'https:' || location.hostname === 'localhost')) {
   navigator.serviceWorker.register('sw.js').catch(() => {});
+  // The service worker adds the headers that let the on-device model use all
+  // CPU cores. They apply from the next page load, so reload once when it
+  // first takes over (never in the middle of a take).
+  navigator.serviceWorker.addEventListener('controllerchange', () => {
+    if (!crossOriginIsolated && !rec && !busy && !sessionStorage.getItem('isolationReload')) {
+      sessionStorage.setItem('isolationReload', '1');
+      location.reload();
+    }
+  });
 }

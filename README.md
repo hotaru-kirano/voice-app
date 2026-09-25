@@ -25,6 +25,43 @@ Progressive Web App, so it installs to your home screen.
    `whisper-large-v3-turbo` model. For another provider, set the base URL and
    model yourself.
 
+## Offline (on-device) transcription
+
+The app can also transcribe on your phone, with no internet connection, using
+[Moonshine v2](https://arxiv.org/abs/2602.12241) Small (English only) run by
+[Transformers.js](https://huggingface.co/docs/transformers.js).
+
+1. While online, open Settings → **Offline (on-device)** and tap **Download**
+   (180–300 MB, once; use Wi‑Fi).
+2. Choose **Transcribe with**:
+   - **Cloud, or on-device when offline** (default): uses the cloud API, and
+     switches to on-device when the phone is offline or the request can't get
+     through.
+   - **Always on-device**: never sends audio anywhere.
+   - **Always cloud**.
+
+How it keeps latency low:
+- **Processor.** It uses the GPU (WebGPU, 4-bit model, ~180 MB) when the phone
+  supports it, otherwise the CPU (multi-threaded WebAssembly, full-precision
+  encoder + 8-bit decoder, ~300 MB). "On-device processor: CPU only" forces the
+  CPU. If the GPU fails, the app falls back to the CPU on its own.
+- **Transcribing at pauses.** While you talk, the recording is cut at natural
+  pauses and each piece is transcribed right away, so by the time you tap stop
+  usually only the last few seconds are left.
+- **Timing.** After each take the status line shows what was used and how long
+  it took from tapping stop, e.g. `On-device · GPU · 0.4 s` or `Groq · 0.9 s`.
+
+Notes:
+- The browser's noise suppression is turned off for on-device takes. It
+  garbles audio for the on-device model, which was trained on unprocessed
+  speech.
+- The model weights come from
+  [`Workmind/moonshine-streaming-small-ONNX`](https://huggingface.co/Workmind/moonshine-streaming-small-ONNX),
+  a community ONNX export of the official MIT-licensed weights.
+- The service worker adds cross-origin isolation headers (GitHub Pages can't),
+  which the CPU path needs to use more than one core. The first visit reloads
+  itself once to turn them on.
+
 ## Behaviour details
 
 - The draft stays on screen while you record, so you can read it while you
@@ -47,10 +84,14 @@ web/            the app (this is what gets deployed)
   index.html
   style.css
   app.js
-  sw.js         offline cache for the app itself
+  local-stt.js  on-device transcription: worker wrapper + pause-based chunking
+  stt-worker.js runs Moonshine v2 with Transformers.js (WebGPU or WASM)
+  pcm-worklet.js  passes raw mic samples to the chunker
+  sw.js         offline cache + cross-origin isolation headers
   manifest.webmanifest
   icons/
-tests/e2e.cjs   Playwright test with a fake microphone and a mocked API
+tests/e2e.cjs   Playwright test with a fake microphone, a mocked API and a
+                stand-in for the on-device model
 ```
 
 ## Running locally
