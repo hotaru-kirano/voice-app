@@ -153,6 +153,20 @@ function makeWav() {
   await page.click('#settings button[value="save"]');
   await page.waitForFunction(() => JSON.parse(localStorage.getItem('settings')).baseUrl === 'https://api.groq.com/openai/v1');
 
+  // 10. A Groq key that arrives without an input event (e.g. keyboard autofill)
+  //     still gets Groq's endpoint on save, and existing settings are fixed on load.
+  await page.evaluate(() => localStorage.setItem('settings', '{}'));
+  await page.reload();
+  await page.click('#settings-btn');
+  await page.evaluate(() => (document.querySelector('input[name=apiKey]').value = 'gsk_autofilled'));
+  await page.click('#settings button[value="save"]');
+  await page.waitForFunction(() => JSON.parse(localStorage.getItem('settings')).baseUrl === 'https://api.groq.com/openai/v1');
+  await page.evaluate(() => localStorage.setItem('settings', JSON.stringify({ apiKey: 'gsk_old', baseUrl: 'https://api.openai.com/v1', model: 'whisper-1' })));
+  await page.reload();
+  await page.click('#settings-btn');
+  assert.strictEqual(await page.inputValue('input[name=baseUrl]'), 'https://api.groq.com/openai/v1');
+  assert.strictEqual(await page.inputValue('input[name=model]'), 'whisper-large-v3-turbo');
+
   assert.deepStrictEqual(errors, []);
   console.log(`PASS (${requests.length} transcription requests)`);
   await browser.close();

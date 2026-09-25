@@ -22,7 +22,15 @@ function loadJSON(key, fallback) {
   }
 }
 
-let settings = { ...DEFAULTS, ...loadJSON('settings', {}) };
+// A Groq key (gsk_…) with the OpenAI defaults means Groq's endpoint and model.
+const GROQ = { baseUrl: 'https://api.groq.com/openai/v1', model: 'whisper-large-v3-turbo' };
+
+function withProviderDefaults(s) {
+  if (!s.apiKey.startsWith('gsk_') || s.baseUrl !== DEFAULTS.baseUrl) return s;
+  return { ...s, baseUrl: GROQ.baseUrl, model: s.model === DEFAULTS.model ? GROQ.model : s.model };
+}
+
+let settings = withProviderDefaults({ ...DEFAULTS, ...loadJSON('settings', {}) });
 
 // ---------- Versions ----------
 // Every take is appended; the surface shows one of them (the newest by default).
@@ -298,24 +306,22 @@ function openSettings() {
   settingsDialog.showModal();
 }
 
-// Pasting a Groq key fills in Groq's endpoint and Whisper model.
-const GROQ = { baseUrl: 'https://api.groq.com/openai/v1', model: 'whisper-large-v3-turbo' };
+// Show the Groq endpoint as soon as a Groq key is typed or pasted.
 form.apiKey.addEventListener('input', () => {
-  if (form.apiKey.value.trim().startsWith('gsk_') && form.baseUrl.value.trim() === DEFAULTS.baseUrl) {
-    form.baseUrl.value = GROQ.baseUrl;
-    if (form.model.value.trim() === DEFAULTS.model) form.model.value = GROQ.model;
-  }
+  const s = withProviderDefaults({ apiKey: form.apiKey.value.trim(), baseUrl: form.baseUrl.value.trim(), model: form.model.value.trim() });
+  form.baseUrl.value = s.baseUrl;
+  form.model.value = s.model;
 });
 
 $('#settings-btn').addEventListener('click', openSettings);
 settingsDialog.addEventListener('close', () => {
   if (settingsDialog.returnValue !== 'save') return;
-  settings = {
+  settings = withProviderDefaults({
     baseUrl: form.baseUrl.value.trim() || DEFAULTS.baseUrl,
     apiKey: form.apiKey.value.trim(),
     model: form.model.value.trim() || DEFAULTS.model,
     language: form.language.value.trim(),
-  };
+  });
   localStorage.setItem('settings', JSON.stringify(settings));
   toast('Settings saved');
 });
