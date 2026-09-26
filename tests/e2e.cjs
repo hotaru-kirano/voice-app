@@ -167,7 +167,22 @@ async function testOnDevice(url) {
   assert.match(await page.textContent('#text'), /^word1/);
   assert.match(await page.textContent('#status'), /^On-device \(no connection\) · /);
 
-  // 6. ...and streams on-device when the phone is offline.
+  // 6. The switch on the main screen flips to on-device and back.
+  cloudDown = false;
+  assert.strictEqual(await page.textContent('#engine-btn'), 'Cloud');
+  await page.click('#engine-btn');
+  assert.strictEqual(await page.textContent('#engine-btn'), 'Offline');
+  assert.strictEqual(await page.getAttribute('#engine-btn', 'aria-pressed'), 'true');
+  await take(3000, async () => assert.ok(await page.isDisabled('#engine-btn')));
+  assert.match(await page.textContent('#status'), /^On-device · /);
+  await page.reload(); // the choice is remembered
+  assert.strictEqual(await page.textContent('#engine-btn'), 'Offline');
+  await page.click('#engine-btn');
+  assert.strictEqual(await page.textContent('#engine-btn'), 'Cloud');
+  await take(1500);
+  assert.strictEqual(await page.textContent('#text'), 'from the cloud');
+
+  // 7. ...and streams on-device when the phone is offline.
   cloudDown = false;
   await page.evaluate(() => Object.defineProperty(Navigator.prototype, 'onLine', { get: () => false }));
   await take(3000, async () => assert.match(await page.getAttribute('#text', 'class'), /\blive\b/));
@@ -217,6 +232,13 @@ async function testOnDevice(url) {
   }
 
   assert.ok(await page.isVisible('#placeholder'));
+
+  // The Cloud/Offline switch needs the offline model first.
+  assert.strictEqual(await page.textContent('#engine-btn'), 'Cloud');
+  await page.click('#engine-btn');
+  await page.waitForSelector('#settings[open]');
+  await page.click('#settings button[value="cancel"]');
+  assert.strictEqual(await page.textContent('#engine-btn'), 'Cloud');
 
   // 1. First take fills the surface.
   replies.push({ text: 'I want to plan a trip, maybe Kyoto, not sure when.' });

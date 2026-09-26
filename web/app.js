@@ -207,6 +207,7 @@ async function startRecording() {
 
   rec = { recorder, stream, ctx, chunks, started, timer, mode, live };
   micBtn.setAttribute('aria-pressed', 'true');
+  renderEngine();
   micBtn.setAttribute('aria-label', 'Finish speaking');
   setStatus('Recording 0:00');
   keepAwake(true);
@@ -223,6 +224,7 @@ async function stopRecording() {
   ctx.close();
   keepAwake(false);
   micBtn.setAttribute('aria-pressed', 'false');
+  renderEngine();
   micBtn.setAttribute('aria-label', 'Speak');
   micBtn.style.setProperty('--level', 0);
 
@@ -334,11 +336,46 @@ function cloudLabel() {
   }
 }
 
+// ---------- Cloud / Offline switch ----------
+
+const engineBtn = $('#engine-btn');
+
+function renderEngine() {
+  const offline = settings.engine === 'local';
+  engineBtn.textContent = offline ? 'Offline' : 'Cloud';
+  engineBtn.setAttribute('aria-pressed', String(offline));
+  engineBtn.setAttribute('aria-label', offline ? 'Using on-device transcription. Switch to cloud' : 'Using cloud transcription. Switch to on-device');
+  engineBtn.disabled = Boolean(rec) || busy;
+}
+
+function saveSettingsQuietly() {
+  localStorage.setItem('settings', JSON.stringify(settings));
+}
+
+engineBtn.addEventListener('click', () => {
+  if (rec || busy) return;
+  if (settings.engine === 'local') {
+    settings = { ...settings, engine: settings.cloudEngine || 'auto' };
+    toast('Cloud transcription');
+  } else {
+    if (!Local.isDownloaded()) {
+      toast('Download the offline model first');
+      return openSettings();
+    }
+    settings = { ...settings, cloudEngine: settings.engine, engine: 'local' };
+    toast('On-device transcription');
+    Local.load().catch(() => {});
+  }
+  saveSettingsQuietly();
+  renderEngine();
+});
+
 function setBusy(on) {
   busy = on;
   micBtn.classList.toggle('busy', on);
   micBtn.disabled = on;
   $('#surface').classList.toggle('busy', on);
+  renderEngine();
 }
 
 // ---------- Wake lock ----------
@@ -477,14 +514,17 @@ settingsDialog.addEventListener('close', () => {
     model: form.model.value.trim() || DEFAULTS.model,
     language: form.language.value.trim(),
     engine: form.engine.value,
+    cloudEngine: settings.cloudEngine,
   });
   localStorage.setItem('settings', JSON.stringify(settings));
   toast('Settings saved');
+  renderEngine();
   warmUpIfNeeded();
 });
 
 // Init
 render();
+renderEngine();
 warmUpIfNeeded();
 
 if ('serviceWorker' in navigator && (location.protocol === 'https:' || location.hostname === 'localhost')) {

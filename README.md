@@ -40,6 +40,9 @@ through Moonshine's official WebAssembly package,
      through.
    - **Always on-device**: never sends audio anywhere.
    - **Always cloud**.
+3. Or tap the **Cloud / Offline** switch at the top of the main screen to flip
+   to on-device and back in one tap. Switching back returns to whichever cloud
+   mode you had before.
 
 How it works:
 - **True streaming.** Audio is fed to the model as you speak, and the draft on
