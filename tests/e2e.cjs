@@ -228,6 +228,15 @@ async function testXai(url) {
     seen.batch++;
     route.fulfill({ status: 200, contentType: 'application/json', headers: cors, body: JSON.stringify({ text: 'from the batch api' }) });
   });
+  const tts = [];
+  await context.route('https://api.x.ai/v1/tts/voices', (route) =>
+    route.fulfill({ status: 200, contentType: 'application/json', headers: cors, body: JSON.stringify({ voices: [
+      { voice_id: 'ara', name: 'Ara', gender: 'female' }, { voice_id: 'eve', name: 'Eve', gender: 'female' }, { voice_id: 'rex', name: 'Rex', gender: 'male' },
+    ] }) }));
+  await context.route('https://api.x.ai/v1/tts', (route) => {
+    tts.push(JSON.parse(route.request().postData()));
+    route.fulfill({ status: 200, contentType: 'audio/wav', headers: cors, body: fs.readFileSync(makeWav('tts', [[0.6, 1]])) });
+  });
   let dropConnections = false;
   await context.routeWebSocket(/wss:\/\/api\.x\.ai\/v1\/stt/, (ws) => {
     seen.wsUrls.push(ws.url());
@@ -334,6 +343,44 @@ async function testXai(url) {
   assert.strictEqual(await page.textContent('#text'), 'from the batch api');
   assert.strictEqual(seen.wsUrls.length, connections, 'no live connection when live text is off');
   assert.strictEqual(seen.batch, 2);
+
+  // 5. Read aloud: Listen plays the draft with the chosen voice.
+  const draft = await page.textContent('#text');
+  assert.ok(await page.isVisible('#listen-btn'));
+  await page.click('#listen-btn');
+  await page.waitForFunction(() => document.querySelector('#listen-btn').textContent === 'Stop');
+  assert.deepStrictEqual(tts.at(-1), { text: draft, voice_id: 'eve', language: 'auto', speed: 1, text_normalization: true });
+  await page.waitForFunction(() => document.querySelector('#listen-btn').textContent === 'Listen', null, { timeout: 5000 });
+  // Listening again to the same text reuses the audio.
+  await page.click('#listen-btn');
+  await page.waitForFunction(() => document.querySelector('#listen-btn').textContent === 'Stop');
+  await page.waitForFunction(() => document.querySelector('#listen-btn').textContent === 'Listen', null, { timeout: 5000 });
+  assert.strictEqual(tts.length, 1);
+
+  // 6. Settings: the voice list comes from xAI; preview, pick a voice and speed.
+  await page.click('#settings-btn');
+  await page.waitForFunction(() => document.querySelector('select[name=ttsVoice]').options.length === 3);
+  assert.strictEqual(await page.inputValue('select[name=ttsVoice]'), 'eve');
+  await page.selectOption('select[name=ttsVoice]', 'rex');
+  await page.fill('input[name=ttsSpeed]', '1.2');
+  await page.click('#preview-btn');
+  await page.waitForFunction(() => document.querySelector('#listen-btn').textContent === 'Stop');
+  assert.strictEqual(tts.at(-1).voice_id, 'rex');
+  assert.match(tts.at(-1).text, /^Hi, I'm Rex\./);
+  await page.click('#settings button[value="save"]');
+  await page.waitForFunction(() => JSON.parse(localStorage.getItem('settings')).ttsVoice === 'rex');
+  await page.click('#listen-btn');
+  await page.waitForFunction(() => document.querySelector('#listen-btn').textContent === 'Stop');
+  assert.strictEqual(tts.at(-1).voice_id, 'rex');
+  assert.strictEqual(tts.at(-1).speed, 1.2);
+
+  // 7. Starting a take stops playback and hides the button while recording.
+  await page.click('#mic-btn');
+  await page.waitForSelector('#mic-btn[aria-pressed="true"]');
+  assert.ok(await page.isHidden('#listen-btn'));
+  assert.strictEqual(await page.textContent('#listen-btn'), 'Listen');
+  await page.click('#mic-btn');
+  await page.waitForSelector('#mic-btn:not(.busy)[aria-pressed="false"]');
 
   assert.deepStrictEqual(errors, []);
   await browser.close();

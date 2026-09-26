@@ -150,7 +150,7 @@ button { cursor: pointer; }
   width: 100%;
   max-width: 420px;
 }
-#retry-btn { justify-self: end; grid-column: 1; }
+.dock-left { justify-self: end; grid-column: 1; display: flex; gap: 8px; }
 #copy-btn { justify-self: start; grid-column: 3; }
 .mic { grid-column: 2; }
 
@@ -163,6 +163,8 @@ button { cursor: pointer; }
   color: var(--muted);
 }
 .side-btn:disabled { visibility: hidden; }
+#listen-btn[data-state="loading"] { opacity: .6; }
+#listen-btn[data-state="playing"] { color: var(--accent); border-color: currentColor; }
 #retry-btn { color: var(--live); border-color: currentColor; }
 
 /* Mic button: idle -> recording -> busy */
@@ -218,6 +220,7 @@ button { cursor: pointer; }
 }
 .provider-fields { display: grid; gap: 12px; }
 .sheet label.check { display: flex; align-items: center; gap: 10px; }
+.sheet input[type=range] { width: 100%; padding: 0; border: 0; background: none; accent-color: var(--accent); }
 .sheet input[type=checkbox] { width: 20px; height: 20px; padding: 0; accent-color: var(--accent); flex: none; }
 .provider-fields[hidden] { display: none; }
 .offline {

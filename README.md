@@ -25,6 +25,19 @@ Progressive Web App, so it installs to your home screen.
    `whisper-large-v3-turbo` model. For another provider, set the base URL and
    model yourself.
 
+## Read aloud (xAI Grok text-to-speech)
+
+With an xAI key in Settings, a **Listen** button appears next to the mic. It
+reads the current draft aloud with xAI's `POST /v1/tts`; tap again to stop.
+- **Settings → Read aloud (xAI):** pick a **Voice** (the list is loaded from
+  `GET /v1/tts/voices`, so new voices show up automatically), set the
+  **Speed** (0.7–1.5×), and tap **Preview** to hear it.
+- **Replays are free.** Listening to the same draft again with the same voice
+  and speed reuses the audio instead of making another request.
+- **Stops by itself** when you start recording or switch to another version.
+- The xAI key is shared with xAI transcription, so read-aloud also works when
+  you transcribe with Groq or on-device.
+
 ## Live text on or off
 
 Settings → **Show words live while speaking** (on by default) controls live
@@ -119,6 +132,7 @@ web/            the app (this is what gets deployed)
   style.css
   app.js
   xai-stt.js    xAI Grok realtime streaming (WebSocket) + batch fallback
+  xai-tts.js    xAI Grok text-to-speech for Read aloud
   local-stt.js  on-device transcription: main-thread wrapper
   stt-worker.js runs Moonshine v2 streaming (official WASM package) in a worker
   pcm-worklet.js  passes raw mic samples to the worker

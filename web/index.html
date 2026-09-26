@@ -41,7 +41,10 @@
   <footer class="dock">
     <p id="status" class="status" role="status" aria-live="polite"></p>
     <div class="dock-row">
-      <button id="retry-btn" class="side-btn" hidden>Retry</button>
+      <div class="dock-left">
+        <button id="retry-btn" class="side-btn" hidden>Retry</button>
+        <button id="listen-btn" class="side-btn" hidden aria-label="Listen to the draft">Listen</button>
+      </div>
       <button id="mic-btn" class="mic" aria-pressed="false" aria-label="Speak">
         <span class="ring"></span>
         <svg class="icon-mic" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 14a3 3 0 0 0 3-3V5a3 3 0 0 0-6 0v6a3 3 0 0 0 3 3zm5-3a5 5 0 0 1-10 0H5a7 7 0 0 0 6 6.9V21h2v-3.1A7 7 0 0 0 19 11z"/></svg>
@@ -73,17 +76,31 @@
         </label>
       </div>
       <div class="provider-fields" data-provider="xai">
-        <label>xAI API key
-          <input name="xaiKey" type="password" autocomplete="off" placeholder="xai-…">
-        </label>
-        <p class="muted small">Your words appear live as you speak. The key is only used to get a short-lived token from api.x.ai.</p>
+        <p class="muted small">Your words appear live as you speak. The key below is only used to get a short-lived token from api.x.ai.</p>
       </div>
+      <label>xAI API key <small class="muted">(for xAI transcription and Read aloud)</small>
+        <input name="xaiKey" type="password" autocomplete="off" placeholder="xai-…">
+      </label>
       <label>Language <small class="muted">(optional, e.g. en, ja; xAI defaults to en)</small>
         <input name="language" maxlength="8" placeholder="auto-detect">
       </label>
       <label class="check"><input type="checkbox" name="liveText"> Show words live while speaking</label>
       <p class="muted small">Applies to on-device and xAI. Turn it off to keep your current draft on screen until you stop; xAI then uses its batch API.</p>
       <p class="muted small">Your keys stay in this browser and are only sent to the service they belong to.</p>
+
+      <fieldset class="offline">
+        <legend>Read aloud (xAI)</legend>
+        <label>Voice
+          <select name="ttsVoice"></select>
+        </label>
+        <label>Speed <output id="speed-out"></output>
+          <input name="ttsSpeed" type="range" min="0.7" max="1.5" step="0.05">
+        </label>
+        <div class="model-row">
+          <p id="voice-status" class="muted small"></p>
+          <button type="button" id="preview-btn" class="btn">Preview</button>
+        </div>
+      </fieldset>
 
       <fieldset class="offline">
         <legend>Offline (on-device)</legend>

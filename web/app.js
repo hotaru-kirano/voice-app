@@ -6,6 +6,7 @@
 
 import * as Local from './local-stt.js';
 import * as Xai from './xai-stt.js';
+import * as Tts from './xai-tts.js';
 
 const $ = (sel) => document.querySelector(sel);
 
@@ -19,6 +20,8 @@ const DEFAULTS = {
   engine: 'auto', // auto: cloud, on-device when offline | local | cloud
   provider: 'whisper', // cloud service: whisper (Groq, OpenAI, …) | xai
   liveText: true, // show words while speaking (on-device and xAI)
+  ttsVoice: 'eve', // xAI voice for Read aloud
+  ttsSpeed: 1,
   xaiKey: '',
 };
 
@@ -90,6 +93,9 @@ function render({ fresh = false } = {}) {
   $('#prev-btn').disabled = current <= 0;
   $('#next-btn').disabled = current >= versions.length - 1;
   $('#new-btn').disabled = !text;
+  // Whatever was being read aloud belongs to the text that was on screen.
+  if (player?.text !== undefined && player.text !== text) player.stop();
+  renderListen();
 }
 
 function setStatus(text, isError = false) {
@@ -143,7 +149,34 @@ function chooseMode() {
   return cloudConfigured() ? 'cloud' : 'need-key';
 }
 
+// ---------- Read aloud (xAI) ----------
+
+const listenBtn = $('#listen-btn');
+const LISTEN_LABELS = { idle: 'Listen', loading: 'Loading…', playing: 'Stop' };
+
+const player = new Tts.Player((state) => {
+  listenBtn.dataset.state = state;
+  listenBtn.textContent = LISTEN_LABELS[state];
+  listenBtn.setAttribute('aria-label', state === 'idle' ? 'Listen to the draft' : 'Stop listening');
+});
+
+function renderListen() {
+  listenBtn.hidden = !settings.xaiKey || !currentText() || Boolean(rec);
+}
+
+function ttsOptions(overrides = {}) {
+  return { key: settings.xaiKey, voice: settings.ttsVoice, speed: settings.ttsSpeed, language: settings.language, ...overrides };
+}
+
+listenBtn.addEventListener('click', () => {
+  if (player.state !== 'idle') return player.stop();
+  const text = currentText();
+  player.text = text;
+  player.play(text, ttsOptions()).catch((err) => toast(`Couldn’t read aloud: ${err.message}`));
+});
+
 async function startRecording() {
+  player.stop();
   const mode = chooseMode();
   if (mode === 'need-key') {
     toast('Add your API key, or download the offline model');
@@ -222,6 +255,7 @@ async function startRecording() {
   rec = { recorder, stream, ctx, chunks, started, timer, mode, live, xai };
   micBtn.setAttribute('aria-pressed', 'true');
   renderEngine();
+  renderListen();
   micBtn.setAttribute('aria-label', 'Finish speaking');
   setStatus('Recording 0:00');
   keepAwake(true);
@@ -239,6 +273,7 @@ async function stopRecording() {
   keepAwake(false);
   micBtn.setAttribute('aria-pressed', 'false');
   renderEngine();
+  renderListen();
   micBtn.setAttribute('aria-label', 'Speak');
   micBtn.style.setProperty('--level', 0);
 
@@ -470,6 +505,7 @@ const settingsDialog = $('#settings');
 const form = $('#settings-form');
 
 function openSettings() {
+  fillVoices(Tts.cachedVoices());
   for (const [key, value] of Object.entries(settings)) {
     const input = form.elements[key];
     if (!input) continue;
@@ -478,8 +514,57 @@ function openSettings() {
   }
   updateModelStatus();
   showProviderFields();
+  updateSpeedLabel();
+  refreshVoices();
   settingsDialog.showModal();
 }
+
+// ---------- Read aloud settings ----------
+
+function fillVoices(voices) {
+  const select = form.ttsVoice;
+  const chosen = select.value || settings.ttsVoice;
+  const list = voices.length ? voices : [{ voice_id: Tts.DEFAULT_VOICE, name: 'Eve', gender: 'female' }];
+  select.replaceChildren(
+    ...list.map((v) => new Option(v.gender ? `${v.name} (${v.gender})` : v.name, v.voice_id)),
+  );
+  if (![...select.options].some((o) => o.value === chosen)) select.add(new Option(chosen, chosen));
+  select.value = chosen;
+}
+
+async function refreshVoices() {
+  const key = form.xaiKey.value.trim();
+  const status = $('#voice-status');
+  $('#preview-btn').disabled = !key;
+  if (!key) {
+    status.textContent = 'Add an xAI API key to use Read aloud.';
+    return;
+  }
+  status.textContent = '';
+  try {
+    fillVoices(await Tts.listVoices(key));
+    status.textContent = `${form.ttsVoice.options.length} voices`;
+  } catch (err) {
+    status.textContent = `Couldn’t load voices: ${err.message}`;
+  }
+}
+
+function updateSpeedLabel() {
+  $('#speed-out').textContent = `(${Number(form.ttsSpeed.value).toFixed(2)}×)`;
+}
+form.ttsSpeed.addEventListener('input', updateSpeedLabel);
+form.xaiKey.addEventListener('change', refreshVoices);
+
+$('#preview-btn').addEventListener('click', () => {
+  // Tapping Preview again stops the preview; anything else playing is replaced.
+  if (player.state !== 'idle' && player.text === undefined) return player.stop();
+  const name = form.ttsVoice.selectedOptions[0]?.text.replace(/ \(.*\)$/, '') || 'this voice';
+  const text = `Hi, I'm ${name}. This is how your drafts will sound.`;
+  player.text = undefined;
+  player
+    .play(text, ttsOptions({ key: form.xaiKey.value.trim(), voice: form.ttsVoice.value, speed: Number(form.ttsSpeed.value) }))
+    .catch((err) => ($('#voice-status').textContent = `Preview failed: ${err.message}`));
+});
 
 function showProviderFields() {
   for (const el of form.querySelectorAll('.provider-fields')) el.hidden = el.dataset.provider !== form.provider.value;
@@ -542,6 +627,7 @@ form.apiKey.addEventListener('input', () => {
     form.apiKey.value = '';
     form.provider.value = 'xai';
     showProviderFields();
+    refreshVoices();
     return;
   }
   const s = withProviderDefaults({ apiKey: form.apiKey.value.trim(), baseUrl: form.baseUrl.value.trim(), model: form.model.value.trim() });
@@ -551,6 +637,7 @@ form.apiKey.addEventListener('input', () => {
 
 $('#settings-btn').addEventListener('click', openSettings);
 settingsDialog.addEventListener('close', () => {
+  if (player.text === undefined) player.stop(); // a voice preview
   if (settingsDialog.returnValue !== 'save') return;
   settings = withProviderDefaults({
     baseUrl: form.baseUrl.value.trim() || DEFAULTS.baseUrl,
@@ -562,10 +649,13 @@ settingsDialog.addEventListener('close', () => {
     provider: form.provider.value,
     xaiKey: form.xaiKey.value.trim(),
     liveText: form.liveText.checked,
+    ttsVoice: form.ttsVoice.value || Tts.DEFAULT_VOICE,
+    ttsSpeed: Number(form.ttsSpeed.value) || 1,
   });
   localStorage.setItem('settings', JSON.stringify(settings));
   toast('Settings saved');
   renderEngine();
+  renderListen();
   warmUpIfNeeded();
 });
 
