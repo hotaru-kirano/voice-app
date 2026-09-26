@@ -1,6 +1,6 @@
 // Voice Drafts: a focused surface for thinking out loud.
 // Speak -> the transcript fills the surface -> read it -> speak again, and the
-// new take replaces it. Earlier versions are kept so a bad take is never a loss.
+// new take overwrites it. Save keeps it as a note when you're happy with it.
 // Transcription: a Whisper-compatible /audio/transcriptions endpoint (Groq,
 // OpenAI, …), xAI Grok realtime streaming, or Moonshine on the device.
 
@@ -43,30 +43,27 @@ function withProviderDefaults(s) {
 
 let settings = withProviderDefaults({ ...DEFAULTS, ...loadJSON('settings', {}) });
 
-// ---------- Versions ----------
-// Every take is appended; the surface shows one of them (the newest by default).
+// ---------- The draft ----------
+// One working text. Each take overwrites it. It's kept across app restarts
+// (so it isn't lost if the phone closes the app), but it's not a saved note.
 
-const MAX_VERSIONS = 200;
-let versions = loadJSON('versions', []);
-let current = versions.length - 1;
-
-function saveVersions() {
-  if (versions.length > MAX_VERSIONS) {
-    current -= versions.length - MAX_VERSIONS;
-    versions = versions.slice(-MAX_VERSIONS);
-  }
-  localStorage.setItem('versions', JSON.stringify(versions));
+let draft = localStorage.getItem('draft') ?? '';
+// Earlier builds kept every version; carry over the one on screen, drop the rest.
+if (localStorage.getItem('versions') !== null) {
+  const old = loadJSON('versions', []);
+  draft = [...old].reverse().find((v) => v.text)?.text ?? '';
+  localStorage.removeItem('versions');
+  localStorage.setItem('draft', draft);
 }
 
 function currentText() {
-  return versions[current]?.text ?? '';
+  return draft;
 }
 
-function addVersion(text) {
-  versions.push({ text, at: Date.now() });
-  current = versions.length - 1;
-  saveVersions();
-  render({ fresh: true });
+function setDraft(text, { fresh = true } = {}) {
+  draft = text;
+  localStorage.setItem('draft', draft);
+  render({ fresh });
 }
 
 // ---------- Rendering ----------
@@ -88,11 +85,7 @@ function render({ fresh = false } = {}) {
     $('#surface').scrollTop = 0;
   }
 
-  $('#history').hidden = versions.length < 2;
-  $('#version').textContent = `${current + 1} / ${versions.length}`;
-  $('#prev-btn').disabled = current <= 0;
-  $('#next-btn').disabled = current >= versions.length - 1;
-  $('#clear-btn').disabled = versions.length === 0;
+  $('#clear-btn').disabled = !text;
   $('#save-btn').disabled = !text;
   $('#save-btn').classList.toggle('done', Boolean(text) && isSaved(text));
   $('#save-btn').textContent = text && isSaved(text) ? 'Saved' : 'Save';
@@ -337,7 +330,7 @@ async function transcribeTake(take) {
     const secs = ((performance.now() - started) / 1000).toFixed(1);
     textEl.classList.remove('live');
     if (text) {
-      addVersion(text);
+      setDraft(text);
       setStatus(`${via} · ${secs} s`);
     } else {
       render();
@@ -488,22 +481,19 @@ $('#copy-btn').addEventListener('click', async () => {
   }
 });
 
-// Deletes the current draft and all its versions. Saved drafts are kept.
+// Blanks the draft. Notes are kept.
 $('#clear-btn').addEventListener('click', () => {
-  if (!versions.length || rec || busy) return;
   const text = currentText();
-  if (text && !isSaved(text) && !confirm('Clear this draft? It isn’t saved, and its versions will be deleted.')) return;
+  if (!text || rec || busy) return;
+  if (!isSaved(text) && !confirm('Clear this draft? It isn’t saved as a note.')) return;
   player.stop();
-  versions = [];
-  current = -1;
-  saveVersions();
-  render();
+  setDraft('', { fresh: false });
   setStatus('');
   toast('Cleared');
 });
 
-// ---------- Saved drafts ----------
-// Drafts you chose to keep, newest first. Separate from the version history.
+// ---------- Notes ----------
+// Drafts you chose to keep with Save, newest first.
 
 let saved = loadJSON('saved', []);
 
@@ -521,11 +511,11 @@ function storeSaved() {
 $('#save-btn').addEventListener('click', () => {
   const text = currentText();
   if (!text) return;
-  if (isSaved(text)) return toast('Already saved');
+  if (isSaved(text)) return toast('Already in your notes');
   saved.unshift({ id: crypto.randomUUID?.() ?? String(Date.now()), text, at: Date.now() });
   storeSaved();
   render();
-  toast('Draft saved');
+  toast('Saved to notes');
 });
 
 const savedDialog = $('#saved');
@@ -575,27 +565,29 @@ $('#saved-btn').addEventListener('click', () => {
 $('#saved-list').addEventListener('click', async (e) => {
   const action = e.target.closest('[data-action]')?.dataset.action;
   const id = e.target.closest('li')?.dataset.id;
-  const draft = saved.find((d) => d.id === id);
-  if (!action || !draft) return;
+  const note = saved.find((d) => d.id === id);
+  if (!action || !note) return;
   if (action === 'open') {
-    // Brings it back as the newest version, so you can keep revising it.
+    // Puts the note on the surface so you can keep revising it by voice.
+    const text = currentText();
+    if (text && text !== note.text && !isSaved(text) && !confirm('Replace the current draft? It isn’t saved as a note.')) return;
     player.stop();
-    if (currentText() !== draft.text) addVersion(draft.text);
+    setDraft(note.text);
     savedDialog.close();
   } else if (action === 'copy') {
     try {
-      await navigator.clipboard.writeText(draft.text);
+      await navigator.clipboard.writeText(note.text);
       toast('Copied');
     } catch {
       toast('Copy failed');
     }
   } else if (action === 'listen') {
-    if (player.state !== 'idle' && player.text === draft.text) return player.stop();
-    player.text = draft.text;
-    player.play(draft.text, ttsOptions()).catch((err) => toast(`Couldn’t read aloud: ${err.message}`));
+    if (player.state !== 'idle' && player.text === note.text) return player.stop();
+    player.text = note.text;
+    player.play(note.text, ttsOptions()).catch((err) => toast(`Couldn’t read aloud: ${err.message}`));
   } else if (action === 'delete') {
-    if (!confirm('Delete this saved draft?')) return;
-    saved = saved.filter((d) => d !== draft);
+    if (!confirm('Delete this note?')) return;
+    saved = saved.filter((d) => d !== note);
     storeSaved();
     renderSaved();
     render();
@@ -606,14 +598,6 @@ savedDialog.addEventListener('close', () => {
   if (player.text !== currentText()) player.stop();
 });
 
-$('#prev-btn').addEventListener('click', () => {
-  if (current > 0) current--;
-  render();
-});
-$('#next-btn').addEventListener('click', () => {
-  if (current < versions.length - 1) current++;
-  render();
-});
 
 // Settings dialog
 const settingsDialog = $('#settings');

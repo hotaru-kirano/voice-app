@@ -14,20 +14,11 @@
 <body>
   <header class="bar">
     <div class="bar-left">
-      <button id="saved-btn" class="icon-btn" aria-label="Saved drafts" title="Saved drafts">
+      <button id="saved-btn" class="icon-btn" aria-label="Notes" title="Notes">
         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M17 3H7a2 2 0 0 0-2 2v16l7-3 7 3V5a2 2 0 0 0-2-2z"/></svg>
         <span id="saved-count" class="badge" hidden></span>
       </button>
-      <button id="clear-btn" class="text-btn" title="Delete this draft and its versions">Clear</button>
-    </div>
-    <div class="history" id="history">
-      <button id="prev-btn" class="icon-btn" aria-label="Previous version">
-        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15.4 7.4 14 6l-6 6 6 6 1.4-1.4-4.6-4.6z"/></svg>
-      </button>
-      <span id="version" class="muted"></span>
-      <button id="next-btn" class="icon-btn" aria-label="Next version">
-        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8.6 16.6 10 18l6-6-6-6-1.4 1.4 4.6 4.6z"/></svg>
-      </button>
+      <button id="clear-btn" class="text-btn" title="Clear the draft">Clear</button>
     </div>
     <div class="bar-right">
       <button id="engine-btn" class="engine-pill" aria-pressed="false" title="Switch between cloud and on-device transcription">Cloud</button>
@@ -39,7 +30,7 @@
 
   <main id="surface" class="surface">
     <p id="text" class="text"></p>
-    <p id="placeholder" class="placeholder">Tap the mic and say what’s on your mind.<br>Read it back, then speak again to replace it with a better version.</p>
+    <p id="placeholder" class="placeholder">Tap the mic and say what’s on your mind.<br>Read it back, then speak again to overwrite it with a better version. Tap Save when you’re happy.</p>
   </main>
 
   <footer class="dock">
@@ -56,7 +47,7 @@
         <span class="spinner" aria-hidden="true"></span>
       </button>
       <div class="dock-right">
-        <button id="save-btn" class="side-btn" aria-label="Save draft">Save</button>
+        <button id="save-btn" class="side-btn" aria-label="Save as a note">Save</button>
         <button id="copy-btn" class="side-btn" aria-label="Copy text">Copy</button>
       </div>
     </div>
@@ -135,12 +126,12 @@
   <dialog id="saved" class="sheet">
     <form method="dialog">
       <div class="sheet-head">
-        <h2>Saved drafts</h2>
+        <h2>Notes</h2>
         <button value="close" class="icon-btn" aria-label="Close">
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M19 6.4 17.6 5 12 10.6 6.4 5 5 6.4 10.6 12 5 17.6 6.4 19 12 13.4 17.6 19 19 17.6 13.4 12z"/></svg>
         </button>
       </div>
-      <p id="saved-empty" class="muted small">Nothing saved yet. Tap Save under a draft you want to keep.</p>
+      <p id="saved-empty" class="muted small">No notes yet. When you’re happy with a draft, tap Save.</p>
       <ul id="saved-list" class="saved-list"></ul>
     </form>
   </dialog>

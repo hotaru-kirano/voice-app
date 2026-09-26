@@ -25,19 +25,20 @@ Progressive Web App, so it installs to your home screen.
    `whisper-large-v3-turbo` model. For another provider, set the base URL and
    model yourself.
 
-## Saving and clearing drafts
+## The draft and your notes
 
-- **Save** (next to Copy) keeps the current draft in **Saved drafts**. The
-  button reads "Saved" when the text on screen is already saved.
-- **Saved drafts** (bookmark icon, top left, with a count) lists them newest
-  first. **Open** brings one back as the newest version so you can keep revising
-  it; there's also **Copy**, **Listen** (with an xAI key) and delete.
-- **Clear** (top left) deletes the current draft and all its ‹ › versions, so
-  you start fresh. Saved drafts are kept. If the draft on screen isn't saved,
-  it asks first.
+- **One draft.** Each take **overwrites** the text on screen. There's no version
+  history: keep recording until you're happy with it. The draft survives the app
+  being closed, but it isn't a saved note.
+- **Save** (next to Copy) keeps the draft as a **note**. The button reads
+  "Saved" when the text on screen is already a note.
+- **Notes** (bookmark icon, top left, with a count) lists them newest first.
+  **Open** puts a note back on screen so you can keep revising it by voice;
+  there's also **Copy**, **Listen** (with an xAI key) and delete.
+- **Clear** (top left) blanks the draft. If it isn't saved as a note, it asks
+  first.
 
-Saved drafts are stored in this browser (localStorage), separately from the
-version history.
+Notes are stored in this browser (localStorage).
 
 ## Read aloud (xAI Grok text-to-speech)
 
@@ -48,7 +49,7 @@ reads the current draft aloud with xAI's `POST /v1/tts`; tap again to stop.
   **Speed** (0.7–1.5×), and tap **Preview** to hear it.
 - **Replays are free.** Listening to the same draft again with the same voice
   and speed reuses the audio instead of making another request.
-- **Stops by itself** when you start recording or switch to another version.
+- **Stops by itself** when you start recording or the draft changes.
 - The xAI key is shared with xAI transcription, so read-aloud also works when
   you transcribe with Groq or on-device.
 
@@ -129,7 +130,7 @@ Notes:
   speak the next version.
 - The current draft is sent to the API as the Whisper `prompt`, which helps it
   keep names and terms spelled the same way between takes.
-- A take only replaces the draft when transcription succeeds and returns text.
+- A take only overwrites the draft when transcription succeeds and returns text.
   If it fails, the draft is untouched and **Retry** resends the same recording.
   Taps shorter than 0.7 s are ignored.
 - The screen stays awake while recording (Screen Wake Lock API).

@@ -137,7 +137,7 @@ async function testOnDevice(url) {
 
   // 3. The draft is replaced live while speaking, then kept when done.
   await page.evaluate(() => {
-    localStorage.setItem('versions', JSON.stringify([{ text: 'Old draft about Kyoto', at: 1 }]));
+    localStorage.setItem('draft', 'Old draft about Kyoto');
   });
   await page.reload();
   await take(4000, async () => {
@@ -146,7 +146,7 @@ async function testOnDevice(url) {
   });
   assert.match(await page.textContent('#text'), /^word1( word\d+)+$/);
   assert.doesNotMatch(await page.getAttribute('#text', 'class'), /\blive\b/);
-  assert.strictEqual(await page.textContent('#version'), '2 / 2');
+  assert.strictEqual(await page.evaluate(() => localStorage.getItem('draft')), await page.textContent('#text'));
   assert.match(await page.textContent('#status'), /^On-device · \d+\.\d s$/);
   // The draft being revised was given to the engine as context.
   assert.ok(calls.includes('https://stub.test/context?text=Old draft about Kyoto'));
@@ -275,7 +275,7 @@ async function testXai(url) {
   });
   await context.addInitScript(() => {
     if (!localStorage.getItem('settings')) localStorage.setItem('settings', '{}');
-    if (!localStorage.getItem('versions')) localStorage.setItem('versions', JSON.stringify([{ text: 'Trip to Kyoto with Hotaru.', at: 1 }]));
+    if (localStorage.getItem('draft') === null) localStorage.setItem('draft', 'Trip to Kyoto with Hotaru.');
   });
   const page = await context.newPage();
   const errors = [];
@@ -331,10 +331,7 @@ async function testXai(url) {
   await page.click('#settings button[value="save"]');
   await page.waitForFunction(() => JSON.parse(localStorage.getItem('settings')).liveText === false);
   const connections = seen.wsUrls.length;
-  await page.evaluate(() => {
-    const v = JSON.parse(localStorage.getItem('versions'));
-    localStorage.setItem('versions', JSON.stringify([...v, { text: 'Keep me visible', at: 9 }]));
-  });
+  await page.evaluate(() => localStorage.setItem('draft', 'Keep me visible'));
   await page.reload();
   await take(2500, async () => {
     assert.strictEqual(await page.textContent('#text'), 'Keep me visible');
@@ -427,6 +424,14 @@ async function testXai(url) {
 
   assert.ok(await page.isVisible('#placeholder'));
 
+  // Old builds kept every version: the one on screen carries over, the rest go.
+  await page.evaluate(() => localStorage.setItem('versions', JSON.stringify([{ text: 'older', at: 1 }, { text: 'newest', at: 2 }, { text: '', at: 3 }])));
+  await page.reload();
+  assert.strictEqual(await page.textContent('#text'), 'newest');
+  assert.strictEqual(await page.evaluate(() => localStorage.getItem('versions')), null);
+  await page.evaluate(() => localStorage.setItem('draft', ''));
+  await page.reload();
+
   // The Cloud/Offline switch needs the offline model first.
   assert.strictEqual(await page.textContent('#engine-btn'), 'Cloud');
   await page.click('#engine-btn');
@@ -445,12 +450,14 @@ async function testXai(url) {
   assert.match(requests[0].body, /filename="speech\.(webm|ogg|m4a)"/);
   assert.doesNotMatch(requests[0].body, /name="prompt"/);
 
-  // 2. Speaking again replaces it, and the previous draft is sent as context.
+  // 2. Speaking again overwrites it, and the previous draft is sent as context.
   replies.push({ text: 'Trip to Kyoto in May. Budget first, then book flights.' });
   await take();
   assert.strictEqual(await text(), 'Trip to Kyoto in May. Budget first, then book flights.');
   assert.match(requests[1].body, /name="prompt"\r\n\r\nI want to plan a trip, maybe Kyoto/);
-  assert.strictEqual(await page.textContent('#version'), '2 / 2');
+  // Overwritten, not kept: there's no version history.
+  assert.strictEqual(await page.evaluate(() => localStorage.getItem('draft')), 'Trip to Kyoto in May. Budget first, then book flights.');
+  assert.strictEqual(await page.locator('#prev-btn, #version').count(), 0);
 
   // 3. A failed transcription leaves the draft alone and can be retried.
   replies.push({ status: 500 });
@@ -472,12 +479,6 @@ async function testXai(url) {
   assert.strictEqual(requests.length, before);
   assert.match(await page.textContent('#status'), /Too short/);
 
-  // 5. History: step back, then forward.
-  assert.strictEqual(await page.textContent('#version'), '3 / 3');
-  await page.click('#prev-btn');
-  assert.strictEqual(await text(), 'Trip to Kyoto in May. Budget first, then book flights.');
-  await page.click('#next-btn');
-
   // 6. Copy.
   await page.click('#copy-btn');
   assert.strictEqual(await page.evaluate(() => navigator.clipboard.readText()), 'Kyoto, May. One: set a budget. Two: book flights.');
@@ -486,7 +487,7 @@ async function testXai(url) {
   await page.reload();
   assert.strictEqual(await text(), 'Kyoto, May. One: set a budget. Two: book flights.');
 
-  // 8. Save keeps the draft in the Saved drafts list.
+  // 8. Save keeps the draft as a note.
   assert.ok(await page.isHidden('#saved-count'));
   await page.click('#save-btn');
   assert.strictEqual(await page.textContent('#save-btn'), 'Saved');
@@ -494,20 +495,17 @@ async function testXai(url) {
   await page.click('#save-btn'); // saving the same text twice doesn't duplicate it
   assert.strictEqual(await page.textContent('#saved-count'), '1');
 
-  // 9. Clear deletes the draft and its versions (saved drafts stay). A saved
-  //    draft clears without asking.
-  assert.strictEqual(await page.textContent('#version'), '3 / 3');
+  // 9. Clear blanks the draft (notes stay). A saved draft clears without asking.
   await page.click('#clear-btn');
   assert.strictEqual(await text(), '');
   assert.ok(await page.isVisible('#placeholder'));
   assert.ok(await page.isDisabled('#clear-btn'));
   assert.ok(await page.isDisabled('#save-btn'));
-  assert.ok(!(await page.isVisible('#prev-btn')), 'history is gone');
-  assert.deepStrictEqual(await page.evaluate(() => JSON.parse(localStorage.getItem('versions'))), []);
+  assert.strictEqual(await page.evaluate(() => localStorage.getItem('draft')), '');
   assert.strictEqual(await page.textContent('#saved-count'), '1');
 
   // An unsaved draft asks first; cancelling keeps it.
-  await page.evaluate(() => localStorage.setItem('versions', JSON.stringify([{ text: 'Unsaved thought', at: 1 }])));
+  await page.evaluate(() => localStorage.setItem('draft', 'Unsaved thought'));
   await page.reload();
   page.once('dialog', (d) => d.dismiss());
   await page.click('#clear-btn');
@@ -516,7 +514,7 @@ async function testXai(url) {
   await page.click('#clear-btn');
   assert.strictEqual(await text(), '');
 
-  // 10. Saved drafts survive a reload and can be opened, copied and deleted.
+  // 10. Notes survive a reload and can be opened, copied and deleted.
   await page.reload();
   assert.strictEqual(await page.textContent('#saved-count'), '1');
   await page.click('#saved-btn');

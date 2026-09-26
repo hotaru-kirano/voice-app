@@ -42,15 +42,12 @@ button { cursor: pointer; }
 /* Top bar */
 .bar {
   display: grid;
-  grid-template-columns: 1fr auto 1fr;
+  grid-template-columns: 1fr auto;
   align-items: center;
   padding: calc(env(safe-area-inset-top) + 6px) 8px 6px;
 }
 .bar > :first-child { justify-self: start; }
 
-.history { display: flex; align-items: center; gap: 2px; font-size: .9rem; }
-.history[hidden] { display: flex; visibility: hidden; }
-#version { min-width: 3.5em; text-align: center; font-variant-numeric: tabular-nums; }
 
 .bar-left { display: flex; align-items: center; gap: 2px; }
 .text-btn {
