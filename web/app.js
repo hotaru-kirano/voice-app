@@ -92,7 +92,10 @@ function render({ fresh = false } = {}) {
   $('#version').textContent = `${current + 1} / ${versions.length}`;
   $('#prev-btn').disabled = current <= 0;
   $('#next-btn').disabled = current >= versions.length - 1;
-  $('#new-btn').disabled = !text;
+  $('#clear-btn').disabled = !text;
+  $('#save-btn').disabled = !text;
+  $('#save-btn').classList.toggle('done', Boolean(text) && isSaved(text));
+  $('#save-btn').textContent = text && isSaved(text) ? 'Saved' : 'Save';
   // Whatever was being read aloud belongs to the text that was on screen.
   if (player?.text !== undefined && player.text !== text) player.stop();
   renderListen();
@@ -485,10 +488,114 @@ $('#copy-btn').addEventListener('click', async () => {
   }
 });
 
-$('#new-btn').addEventListener('click', () => {
-  if (!currentText()) return;
+$('#clear-btn').addEventListener('click', () => {
+  if (!currentText() || rec || busy) return;
   addVersion('');
-  toast('New draft. Earlier versions are still in history');
+  toast('Cleared. Earlier versions are still in ‹ › history');
+});
+
+// ---------- Saved drafts ----------
+// Drafts you chose to keep, newest first. Separate from the version history.
+
+let saved = loadJSON('saved', []);
+
+function isSaved(text) {
+  return saved.some((d) => d.text === text);
+}
+
+function storeSaved() {
+  localStorage.setItem('saved', JSON.stringify(saved));
+  const count = $('#saved-count');
+  count.hidden = !saved.length;
+  count.textContent = saved.length > 99 ? '99+' : String(saved.length);
+}
+
+$('#save-btn').addEventListener('click', () => {
+  const text = currentText();
+  if (!text) return;
+  if (isSaved(text)) return toast('Already saved');
+  saved.unshift({ id: crypto.randomUUID?.() ?? String(Date.now()), text, at: Date.now() });
+  storeSaved();
+  render();
+  toast('Draft saved');
+});
+
+const savedDialog = $('#saved');
+const savedDate = new Intl.DateTimeFormat(undefined, { dateStyle: 'medium', timeStyle: 'short' });
+
+function renderSaved() {
+  $('#saved-empty').hidden = saved.length > 0;
+  $('#saved-list').replaceChildren(
+    ...saved.map((d) => {
+      const li = document.createElement('li');
+      li.dataset.id = d.id;
+      const p = document.createElement('p');
+      p.className = 'saved-text';
+      p.textContent = d.text;
+      const time = document.createElement('time');
+      time.dateTime = new Date(d.at).toISOString();
+      time.textContent = savedDate.format(d.at);
+      const actions = document.createElement('div');
+      actions.className = 'saved-actions';
+      const button = (label, action, cls = '') => {
+        const b = document.createElement('button');
+        b.type = 'button';
+        b.className = `btn ${cls}`.trim();
+        b.textContent = label;
+        b.dataset.action = action;
+        return b;
+      };
+      actions.append(button('Open', 'open'), button('Copy', 'copy'));
+      if (settings.xaiKey) actions.append(button('Listen', 'listen'));
+      const del = button('', 'delete', 'danger icon');
+      del.setAttribute('aria-label', 'Delete');
+      del.title = 'Delete';
+      del.innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 19a2 2 0 0 0 2 2h8a2 2 0 0 0 2-2V7H6zM19 4h-3.5l-1-1h-5l-1 1H5v2h14z"/></svg>';
+      actions.append(del);
+      li.append(p, time, actions);
+      return li;
+    }),
+  );
+}
+
+$('#saved-btn').addEventListener('click', () => {
+  if (rec) return;
+  renderSaved();
+  savedDialog.showModal();
+});
+
+$('#saved-list').addEventListener('click', async (e) => {
+  const action = e.target.closest('[data-action]')?.dataset.action;
+  const id = e.target.closest('li')?.dataset.id;
+  const draft = saved.find((d) => d.id === id);
+  if (!action || !draft) return;
+  if (action === 'open') {
+    // Brings it back as the newest version, so you can keep revising it.
+    player.stop();
+    if (currentText() !== draft.text) addVersion(draft.text);
+    savedDialog.close();
+  } else if (action === 'copy') {
+    try {
+      await navigator.clipboard.writeText(draft.text);
+      toast('Copied');
+    } catch {
+      toast('Copy failed');
+    }
+  } else if (action === 'listen') {
+    if (player.state !== 'idle' && player.text === draft.text) return player.stop();
+    player.text = draft.text;
+    player.play(draft.text, ttsOptions()).catch((err) => toast(`Couldn’t read aloud: ${err.message}`));
+  } else if (action === 'delete') {
+    if (!confirm('Delete this saved draft?')) return;
+    saved = saved.filter((d) => d !== draft);
+    storeSaved();
+    renderSaved();
+    render();
+  }
+});
+
+savedDialog.addEventListener('close', () => {
+  if (player.text !== currentText()) player.stop();
 });
 
 $('#prev-btn').addEventListener('click', () => {
@@ -660,6 +767,7 @@ settingsDialog.addEventListener('close', () => {
 });
 
 // Init
+storeSaved();
 render();
 renderEngine();
 warmUpIfNeeded();

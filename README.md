@@ -25,6 +25,19 @@ Progressive Web App, so it installs to your home screen.
    `whisper-large-v3-turbo` model. For another provider, set the base URL and
    model yourself.
 
+## Saving and clearing drafts
+
+- **Save** (next to Copy) keeps the current draft in **Saved drafts**. The
+  button reads "Saved" when the text on screen is already saved.
+- **Saved drafts** (bookmark icon, top left, with a count) lists them newest
+  first. **Open** brings one back as the newest version so you can keep revising
+  it; there's also **Copy**, **Listen** (with an xAI key) and delete.
+- **Clear** (top left) blanks the screen for a new thought. Earlier versions
+  stay in the ‹ › history.
+
+Saved drafts are stored in this browser (localStorage), separately from the
+version history.
+
 ## Read aloud (xAI Grok text-to-speech)
 
 With an xAI key in Settings, a **Listen** button appears next to the mic. It

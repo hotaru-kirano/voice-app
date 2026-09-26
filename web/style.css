@@ -52,6 +52,32 @@ button { cursor: pointer; }
 .history[hidden] { display: flex; visibility: hidden; }
 #version { min-width: 3.5em; text-align: center; font-variant-numeric: tabular-nums; }
 
+.bar-left { display: flex; align-items: center; gap: 2px; }
+.text-btn {
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  padding: 8px 10px;
+  min-height: 40px;
+  border-radius: 999px;
+}
+.text-btn:not(:disabled):active { background: var(--border); }
+.text-btn:disabled { opacity: .3; cursor: default; }
+#saved-btn { position: relative; }
+.badge {
+  position: absolute;
+  top: 4px;
+  right: 2px;
+  min-width: 16px;
+  height: 16px;
+  padding: 0 4px;
+  border-radius: 999px;
+  background: var(--accent);
+  color: var(--accent-text);
+  font-size: .65rem;
+  line-height: 16px;
+  text-align: center;
+}
 .bar-right { display: flex; align-items: center; gap: 4px; justify-self: end; }
 
 /* Cloud / Offline switch */
@@ -151,7 +177,7 @@ button { cursor: pointer; }
   max-width: 420px;
 }
 .dock-left { justify-self: end; grid-column: 1; display: flex; gap: 8px; }
-#copy-btn { justify-self: start; grid-column: 3; }
+.dock-right { justify-self: start; grid-column: 3; display: flex; gap: 8px; }
 .mic { grid-column: 2; }
 
 .side-btn {
@@ -163,6 +189,33 @@ button { cursor: pointer; }
   color: var(--muted);
 }
 .side-btn:disabled { visibility: hidden; }
+.dock-left .side-btn, .dock-right .side-btn { padding: 8px 12px; }
+#save-btn.done { color: var(--accent); border-color: currentColor; }
+
+/* Saved drafts */
+.sheet-head { display: flex; align-items: center; justify-content: space-between; }
+.saved-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 10px; }
+.saved-list li {
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 10px 12px;
+  background: var(--bg);
+}
+.saved-list .saved-text {
+  margin: 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  display: -webkit-box;
+  -webkit-line-clamp: 4;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.saved-list time { display: block; font-size: .8rem; color: var(--muted); margin-top: 4px; }
+.saved-actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+.saved-actions .btn { min-height: 34px; padding: 4px 12px; font-size: .9rem; }
+.saved-actions .danger { color: var(--live); margin-left: auto; }
+.saved-actions .icon { width: 34px; padding: 0; display: grid; place-items: center; }
+.saved-actions .icon svg { width: 18px; height: 18px; fill: currentColor; pointer-events: none; }
 #listen-btn[data-state="loading"] { opacity: .6; }
 #listen-btn[data-state="playing"] { color: var(--accent); border-color: currentColor; }
 #retry-btn { color: var(--live); border-color: currentColor; }

@@ -486,14 +486,47 @@ async function testXai(url) {
   await page.reload();
   assert.strictEqual(await text(), 'Kyoto, May. One: set a budget. Two: book flights.');
 
-  // 8. New draft clears the surface; history is kept.
-  await page.click('#new-btn');
+  // 8. Save keeps the draft in the Saved drafts list.
+  assert.ok(await page.isHidden('#saved-count'));
+  await page.click('#save-btn');
+  assert.strictEqual(await page.textContent('#save-btn'), 'Saved');
+  assert.strictEqual(await page.textContent('#saved-count'), '1');
+  await page.click('#save-btn'); // saving the same text twice doesn't duplicate it
+  assert.strictEqual(await page.textContent('#saved-count'), '1');
+
+  // 9. Clear blanks the surface; history is kept.
+  await page.click('#clear-btn');
   assert.strictEqual(await text(), '');
   assert.ok(await page.isVisible('#placeholder'));
+  assert.ok(await page.isDisabled('#clear-btn'));
+  assert.ok(await page.isDisabled('#save-btn'));
   await page.click('#prev-btn');
   assert.strictEqual(await text(), 'Kyoto, May. One: set a budget. Two: book flights.');
+  await page.click('#next-btn');
 
-  // 9. Pasting a Groq key fills in Groq's endpoint and model.
+  // 10. Saved drafts survive a reload and can be opened, copied and deleted.
+  await page.reload();
+  assert.strictEqual(await page.textContent('#saved-count'), '1');
+  await page.click('#saved-btn');
+  await page.waitForSelector('#saved[open]');
+  assert.strictEqual(await page.textContent('#saved-list li .saved-text'), 'Kyoto, May. One: set a budget. Two: book flights.');
+  assert.strictEqual(await page.locator('#saved-list [data-action=listen]').count(), 0); // no xAI key
+  await page.click('#saved-list [data-action=copy]');
+  assert.strictEqual(await page.evaluate(() => navigator.clipboard.readText()), 'Kyoto, May. One: set a budget. Two: book flights.');
+  await page.click('#saved-list [data-action=open]');
+  await page.waitForFunction(() => !document.querySelector('#saved').open);
+  assert.strictEqual(await text(), 'Kyoto, May. One: set a budget. Two: book flights.');
+  assert.strictEqual(await page.textContent('#save-btn'), 'Saved');
+  await page.click('#saved-btn');
+  page.once('dialog', (d) => d.accept());
+  await page.click('#saved-list [data-action=delete]');
+  await page.waitForFunction(() => !document.querySelector('#saved-list li'));
+  assert.ok(await page.isVisible('#saved-empty'));
+  await page.click('#saved button[value=close]');
+  assert.ok(await page.isHidden('#saved-count'));
+  assert.strictEqual(await page.textContent('#save-btn'), 'Save');
+
+  // 11. Pasting a Groq key fills in Groq's endpoint and model.
   await page.evaluate(() => localStorage.setItem('settings', '{}'));
   await page.reload();
   await page.click('#settings-btn');
@@ -504,7 +537,7 @@ async function testXai(url) {
   await page.click('#settings button[value="save"]');
   await page.waitForFunction(() => JSON.parse(localStorage.getItem('settings')).baseUrl === 'https://api.groq.com/openai/v1');
 
-  // 10. A Groq key that arrives without an input event (e.g. keyboard autofill)
+  // 12. A Groq key that arrives without an input event (e.g. keyboard autofill)
   //     still gets Groq's endpoint on save, and existing settings are fixed on load.
   await page.evaluate(() => localStorage.setItem('settings', '{}'));
   await page.reload();
