@@ -56,6 +56,9 @@ reads the current draft aloud with xAI's `POST /v1/tts`; tap again to stop.
 - **Settings → Read aloud (xAI):** pick a **Voice** (the list is loaded from
   `GET /v1/tts/voices`, so new voices show up automatically), set the
   **Speed** (0.7–1.5×), and tap **Preview** to hear it.
+- **Starts fast.** Playback begins as soon as the first audio arrives (the
+  response is streamed into a MediaSource), so a long draft starts in about a
+  second instead of after the whole clip has downloaded.
 - **Replays are free.** Listening to the same draft again with the same voice
   and speed reuses the audio instead of making another request.
 - **Stops by itself** when you start recording or the draft changes.
