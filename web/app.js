@@ -92,7 +92,7 @@ function render({ fresh = false } = {}) {
   $('#version').textContent = `${current + 1} / ${versions.length}`;
   $('#prev-btn').disabled = current <= 0;
   $('#next-btn').disabled = current >= versions.length - 1;
-  $('#clear-btn').disabled = !text;
+  $('#clear-btn').disabled = versions.length === 0;
   $('#save-btn').disabled = !text;
   $('#save-btn').classList.toggle('done', Boolean(text) && isSaved(text));
   $('#save-btn').textContent = text && isSaved(text) ? 'Saved' : 'Save';
@@ -488,10 +488,18 @@ $('#copy-btn').addEventListener('click', async () => {
   }
 });
 
+// Deletes the current draft and all its versions. Saved drafts are kept.
 $('#clear-btn').addEventListener('click', () => {
-  if (!currentText() || rec || busy) return;
-  addVersion('');
-  toast('Cleared. Earlier versions are still in ‹ › history');
+  if (!versions.length || rec || busy) return;
+  const text = currentText();
+  if (text && !isSaved(text) && !confirm('Clear this draft? It isn’t saved, and its versions will be deleted.')) return;
+  player.stop();
+  versions = [];
+  current = -1;
+  saveVersions();
+  render();
+  setStatus('');
+  toast('Cleared');
 });
 
 // ---------- Saved drafts ----------

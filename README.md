@@ -32,8 +32,9 @@ Progressive Web App, so it installs to your home screen.
 - **Saved drafts** (bookmark icon, top left, with a count) lists them newest
   first. **Open** brings one back as the newest version so you can keep revising
   it; there's also **Copy**, **Listen** (with an xAI key) and delete.
-- **Clear** (top left) blanks the screen for a new thought. Earlier versions
-  stay in the ‹ › history.
+- **Clear** (top left) deletes the current draft and all its ‹ › versions, so
+  you start fresh. Saved drafts are kept. If the draft on screen isn't saved,
+  it asks first.
 
 Saved drafts are stored in this browser (localStorage), separately from the
 version history.

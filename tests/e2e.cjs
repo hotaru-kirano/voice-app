@@ -494,15 +494,27 @@ async function testXai(url) {
   await page.click('#save-btn'); // saving the same text twice doesn't duplicate it
   assert.strictEqual(await page.textContent('#saved-count'), '1');
 
-  // 9. Clear blanks the surface; history is kept.
+  // 9. Clear deletes the draft and its versions (saved drafts stay). A saved
+  //    draft clears without asking.
+  assert.strictEqual(await page.textContent('#version'), '3 / 3');
   await page.click('#clear-btn');
   assert.strictEqual(await text(), '');
   assert.ok(await page.isVisible('#placeholder'));
   assert.ok(await page.isDisabled('#clear-btn'));
   assert.ok(await page.isDisabled('#save-btn'));
-  await page.click('#prev-btn');
-  assert.strictEqual(await text(), 'Kyoto, May. One: set a budget. Two: book flights.');
-  await page.click('#next-btn');
+  assert.ok(!(await page.isVisible('#prev-btn')), 'history is gone');
+  assert.deepStrictEqual(await page.evaluate(() => JSON.parse(localStorage.getItem('versions'))), []);
+  assert.strictEqual(await page.textContent('#saved-count'), '1');
+
+  // An unsaved draft asks first; cancelling keeps it.
+  await page.evaluate(() => localStorage.setItem('versions', JSON.stringify([{ text: 'Unsaved thought', at: 1 }])));
+  await page.reload();
+  page.once('dialog', (d) => d.dismiss());
+  await page.click('#clear-btn');
+  assert.strictEqual(await text(), 'Unsaved thought');
+  page.once('dialog', (d) => d.accept());
+  await page.click('#clear-btn');
+  assert.strictEqual(await text(), '');
 
   // 10. Saved drafts survive a reload and can be opened, copied and deleted.
   await page.reload();
