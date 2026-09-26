@@ -55,19 +55,33 @@
   <dialog id="settings" class="sheet">
     <form method="dialog" id="settings-form">
       <h2>Settings</h2>
-      <label>API base URL
-        <input name="baseUrl" type="url" required placeholder="https://api.openai.com/v1">
+      <label>Cloud service
+        <select name="provider">
+          <option value="whisper">Whisper API (Groq, OpenAI, …)</option>
+          <option value="xai">xAI Grok (realtime, live text)</option>
+        </select>
       </label>
-      <label>API key
-        <input name="apiKey" type="password" autocomplete="off" placeholder="sk-…">
-      </label>
-      <label>Model
-        <input name="model" required placeholder="whisper-1">
-      </label>
-      <label>Language <small class="muted">(optional, e.g. en, ja)</small>
+      <div class="provider-fields" data-provider="whisper">
+        <label>API base URL
+          <input name="baseUrl" type="url" placeholder="https://api.openai.com/v1">
+        </label>
+        <label>API key
+          <input name="apiKey" type="password" autocomplete="off" placeholder="sk-… or gsk_…">
+        </label>
+        <label>Model
+          <input name="model" placeholder="whisper-1">
+        </label>
+      </div>
+      <div class="provider-fields" data-provider="xai">
+        <label>xAI API key
+          <input name="xaiKey" type="password" autocomplete="off" placeholder="xai-…">
+        </label>
+        <p class="muted small">Your words appear live as you speak. The key is only used to get a short-lived token from api.x.ai.</p>
+      </div>
+      <label>Language <small class="muted">(optional, e.g. en, ja; xAI defaults to en)</small>
         <input name="language" maxlength="8" placeholder="auto-detect">
       </label>
-      <p class="muted small">Your key stays in this browser and is only sent to the API URL above.</p>
+      <p class="muted small">Your keys stay in this browser and are only sent to the service they belong to.</p>
 
       <fieldset class="offline">
         <legend>Offline (on-device)</legend>

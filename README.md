@@ -25,6 +25,28 @@ Progressive Web App, so it installs to your home screen.
    `whisper-large-v3-turbo` model. For another provider, set the base URL and
    model yourself.
 
+## xAI Grok realtime (live text from the cloud)
+
+Settings → **Cloud service** → **xAI Grok (realtime, live text)**, then paste
+your xAI key (pasting an `xai-…` key into the regular API key field switches
+over automatically). While you speak, your words stream to xAI's
+`grok-voice-transcribe-2.0` and the draft is **replaced live**. The final text
+usually arrives a fraction of a second after you tap stop.
+
+- **The key stays on the device.** It's only used to request a 5-minute token
+  from `api.x.ai/v1/realtime/client_secrets`. The WebSocket
+  (`wss://api.x.ai/v1/stt`) authenticates with that token, passed as the
+  `xai-client-secret.<token>` subprotocol because browsers can't set headers on
+  WebSockets. No backend is needed.
+- **Names stay consistent.** Capitalised words and words with digits from the
+  draft being revised are sent as `keyterm`s.
+- **Language.** xAI needs a language for punctuation, so it uses the Language
+  setting, or English if that's empty.
+- **Fallback.** If the live connection fails, the recording is sent to xAI's
+  batch endpoint (`POST /v1/stt`) instead. If there's no connection at all and
+  the offline model is downloaded, it's transcribed on the device.
+- **Cost.** Streaming is about $0.20 per hour of audio.
+
 ## Offline (on-device) transcription
 
 The app can also transcribe on your phone, with no internet connection, using
@@ -86,14 +108,15 @@ web/            the app (this is what gets deployed)
   index.html
   style.css
   app.js
+  xai-stt.js    xAI Grok realtime streaming (WebSocket) + batch fallback
   local-stt.js  on-device transcription: main-thread wrapper
   stt-worker.js runs Moonshine v2 streaming (official WASM package) in a worker
   pcm-worklet.js  passes raw mic samples to the worker
   sw.js         offline cache + cross-origin isolation headers
   manifest.webmanifest
   icons/
-tests/e2e.cjs   Playwright test with a fake microphone, a mocked API and a
-                stand-in for the on-device model
+tests/e2e.cjs   Playwright test with a fake microphone, mocked APIs (including
+                a mock xAI WebSocket) and a stand-in for the on-device model
 ```
 
 ## Running locally

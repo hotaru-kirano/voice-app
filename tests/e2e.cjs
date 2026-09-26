@@ -192,6 +192,113 @@ async function testOnDevice(url) {
   await browser.close();
 }
 
+// xAI realtime: a mock of wss://api.x.ai/v1/stt that "hears" one word per
+// half second of audio (16 kHz PCM16 = 16000 bytes), locks a segment every 2 s,
+// and finishes on audio.done, like the real service.
+async function testXai(url) {
+  const wav = makeWav('xai', [[6, 1]]);
+  const browser = await chromium.launch({
+    args: ['--use-fake-ui-for-media-stream', '--use-fake-device-for-media-stream', `--use-file-for-fake-audio-capture=${wav}`],
+  });
+  const context = await browser.newContext({ permissions: ['microphone'], serviceWorkers: 'block' });
+  const seen = { tokenAuth: [], wsUrls: [], batch: 0 };
+  const cors = { 'access-control-allow-origin': '*' };
+  await context.route('https://api.x.ai/v1/realtime/client_secrets', (route) => {
+    seen.tokenAuth.push(route.request().headers()['authorization']);
+    route.fulfill({ status: 200, contentType: 'application/json', headers: cors, body: JSON.stringify({ value: 'xai-realtime-test-token', expires_at: 0 }) });
+  });
+  await context.route('https://api.x.ai/v1/stt', (route) => {
+    seen.batch++;
+    route.fulfill({ status: 200, contentType: 'application/json', headers: cors, body: JSON.stringify({ text: 'from the batch api' }) });
+  });
+  let dropConnections = false;
+  await context.routeWebSocket(/wss:\/\/api\.x\.ai\/v1\/stt/, (ws) => {
+    seen.wsUrls.push(ws.url());
+    if (dropConnections) return ws.close({ code: 1011, reason: 'test drop' });
+    let bytes = 0;
+    let segStart = 0;
+    let segWords = 0;
+    const partial = (isFinal) => ws.send(JSON.stringify({
+      type: 'transcript.partial', text: Array.from({ length: segWords }, (_, i) => `s${segStart}w${i + 1}`).join(' '),
+      is_final: isFinal, speech_final: isFinal, start: segStart,
+    }));
+    ws.send(JSON.stringify({ type: 'transcript.created' }));
+    ws.onMessage((msg) => {
+      if (typeof msg === 'string') {
+        if (JSON.parse(msg).type === 'audio.done') {
+          if (segWords) partial(true);
+          ws.send(JSON.stringify({ type: 'transcript.done', text: '' }));
+          ws.close();
+        }
+        return;
+      }
+      bytes += msg.length;
+      while (bytes >= 16000) {
+        bytes -= 16000;
+        segWords++;
+        partial(false);
+        if (segWords === 4) {
+          partial(true);
+          segStart += 2;
+          segWords = 0;
+        }
+      }
+    });
+  });
+  await context.addInitScript(() => {
+    if (!localStorage.getItem('settings')) localStorage.setItem('settings', '{}');
+    if (!localStorage.getItem('versions')) localStorage.setItem('versions', JSON.stringify([{ text: 'Trip to Kyoto with Hotaru.', at: 1 }]));
+  });
+  const page = await context.newPage();
+  const errors = [];
+  page.on('pageerror', (e) => errors.push(e.message));
+  await page.goto(url);
+
+  // 1. Pasting an xAI key into the API key field switches the service to xAI.
+  await page.click('#settings-btn');
+  assert.ok(await page.isVisible('input[name=baseUrl]'));
+  await page.fill('input[name=apiKey]', 'xai-test-key');
+  assert.strictEqual(await page.inputValue('select[name=provider]'), 'xai');
+  assert.strictEqual(await page.inputValue('input[name=xaiKey]'), 'xai-test-key');
+  assert.ok(!(await page.isVisible('input[name=baseUrl]')));
+  await page.click('#settings button[value="save"]');
+
+  async function take(ms, during) {
+    await page.click('#mic-btn');
+    await page.waitForSelector('#mic-btn[aria-pressed="true"]');
+    await page.waitForTimeout(ms);
+    await during?.();
+    await page.click('#mic-btn');
+    await page.waitForSelector('#mic-btn:not(.busy)[aria-pressed="false"]');
+  }
+
+  // 2. Live: the draft is replaced while speaking; segments are stitched together.
+  await take(3500, async () => {
+    assert.match(await page.getAttribute('#text', 'class'), /\blive\b/);
+    assert.match(await page.textContent('#text'), /^s0w1/);
+  });
+  const text = await page.textContent('#text');
+  assert.match(text, /^s0w1 s0w2 s0w3 s0w4 s2w1( s2w\d)*$/);
+  assert.match(await page.textContent('#status'), /^xAI · \d+\.\d s$/);
+  assert.deepStrictEqual(seen.tokenAuth, ['Bearer xai-test-key']);
+  const wsUrl = new URL(seen.wsUrls[0]);
+  assert.strictEqual(wsUrl.searchParams.get('model'), 'grok-voice-transcribe-2.0');
+  assert.strictEqual(wsUrl.searchParams.get('encoding'), 'pcm');
+  assert.strictEqual(wsUrl.searchParams.get('language'), 'en');
+  assert.deepStrictEqual(wsUrl.searchParams.getAll('keyterm'), ['Kyoto', 'Hotaru']);
+  assert.strictEqual(seen.batch, 0);
+
+  // 3. If the live connection fails, the recording is sent to the batch API.
+  dropConnections = true;
+  await take(2000);
+  assert.strictEqual(await page.textContent('#text'), 'from the batch api');
+  assert.match(await page.textContent('#status'), /^xAI · /);
+  assert.strictEqual(seen.batch, 1);
+
+  assert.deepStrictEqual(errors, []);
+  await browser.close();
+}
+
 (async () => {
   const server = await serve();
   const url = `http://localhost:${server.address().port}/`;
@@ -327,6 +434,7 @@ async function testOnDevice(url) {
   assert.deepStrictEqual(errors, []);
   await browser.close();
   await testOnDevice(url);
+  await testXai(url);
   console.log(`PASS (${requests.length} cloud transcription requests)`);
   server.close();
 })().catch((err) => {

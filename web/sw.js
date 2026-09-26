@@ -6,7 +6,7 @@
 //   ("moonshine-models-v1"); this worker never touches that cache.
 // It also adds cross-origin isolation headers so the on-device model can use
 // all CPU cores (SharedArrayBuffer), which GitHub Pages can't set itself.
-const APP_CACHE = 'voice-drafts-v7';
+const APP_CACHE = 'voice-drafts-v8';
 const CDN_CACHE = 'voice-drafts-cdn-v2';
 // Left behind by the earlier Transformers.js engine (~300 MB of model files).
 const OBSOLETE = ['transformers-cache'];
@@ -16,6 +16,7 @@ const ASSETS = [
   'style.css',
   'app.js',
   'local-stt.js',
+  'xai-stt.js',
   'stt-worker.js',
   'pcm-worklet.js',
   'manifest.webmanifest',

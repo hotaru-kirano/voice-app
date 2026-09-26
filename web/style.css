@@ -216,6 +216,8 @@ button { cursor: pointer; }
   background: var(--bg);
   width: 100%;
 }
+.provider-fields { display: grid; gap: 12px; }
+.provider-fields[hidden] { display: none; }
 .offline {
   border: 1px solid var(--border);
   border-radius: 12px;

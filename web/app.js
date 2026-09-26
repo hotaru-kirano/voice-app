@@ -1,9 +1,11 @@
 // Voice Drafts: a focused surface for thinking out loud.
 // Speak -> the transcript fills the surface -> read it -> speak again, and the
 // new take replaces it. Earlier versions are kept so a bad take is never a loss.
-// Transcription uses an OpenAI-compatible /audio/transcriptions endpoint.
+// Transcription: a Whisper-compatible /audio/transcriptions endpoint (Groq,
+// OpenAI, …), xAI Grok realtime streaming, or Moonshine on the device.
 
 import * as Local from './local-stt.js';
+import * as Xai from './xai-stt.js';
 
 const $ = (sel) => document.querySelector(sel);
 
@@ -15,6 +17,8 @@ const DEFAULTS = {
   model: 'whisper-1',
   language: '',
   engine: 'auto', // auto: cloud, on-device when offline | local | cloud
+  provider: 'whisper', // cloud service: whisper (Groq, OpenAI, …) | xai
+  xaiKey: '',
 };
 
 function loadJSON(key, fallback) {
@@ -121,7 +125,12 @@ let busy = false;
 let failedTake = null;
 
 function cloudConfigured() {
+  if (settings.provider === 'xai') return Boolean(settings.xaiKey);
   return Boolean(settings.apiKey) || settings.baseUrl !== DEFAULTS.baseUrl;
+}
+
+function xaiOptions() {
+  return { key: settings.xaiKey, language: settings.language, keyterms: Xai.keytermsFrom(currentText()) };
 }
 
 // Picks cloud or on-device for a take, or explains why neither works.
@@ -170,29 +179,30 @@ async function startRecording() {
   source.connect(analyser);
   const samples = new Float32Array(analyser.fftSize);
 
-  // On-device: stream audio to the model, and replace the draft live with
-  // what it hears. The previous draft stays until the first words arrive.
+  // Streaming (on-device, or xAI): feed audio as it's recorded, and replace
+  // the draft live with what's heard. The previous draft stays until the first
+  // words arrive.
   let live = null;
+  let xai = null;
+  const onText = (text) => text && showLive(text);
   if (mode === 'local') {
-    live = { text: '', ready: null };
-    live.ready = Local.startTake({
-      context: currentText(),
-      onText: (text) => {
-        live.text = text;
-        if (text) showLive(text);
-      },
-    });
-    quiet(live.ready);
+    live = { ready: quiet(Local.startTake({ context: currentText(), onText })) };
+  } else if (settings.provider === 'xai') {
+    xai = new Xai.XaiStream({ ...xaiOptions(), onText });
+  }
+  if (live || xai) {
     try {
       await ctx.audioWorklet.addModule('pcm-worklet.js');
       const tap = new AudioWorkletNode(ctx, 'pcm-tap');
-      tap.port.onmessage = ({ data }) => Local.addAudio(data);
+      tap.port.onmessage = ({ data }) => (live ? Local.addAudio(data) : xai.addAudio(data));
       const mute = ctx.createGain();
       mute.gain.value = 0;
       source.connect(tap).connect(mute).connect(ctx.destination);
     } catch {
-      live = null; // no live audio: transcribe the whole recording at the end
-      Local.finishTake().catch(() => {});
+      // No live audio: transcribe the whole recording at the end instead.
+      if (live) Local.finishTake().catch(() => {});
+      xai?.abort();
+      live = xai = null;
     }
   }
 
@@ -202,10 +212,10 @@ async function startRecording() {
     let sum = 0;
     for (const v of samples) sum += v * v;
     micBtn.style.setProperty('--level', Math.min(Math.sqrt(sum / samples.length) * 8, 1).toFixed(3));
-    setStatus(`Recording ${formatDuration(performance.now() - started)}${mode === 'local' ? ' · on-device' : ''}`);
+    setStatus(`Recording ${formatDuration(performance.now() - started)}${mode === 'local' ? ' · on-device' : xai ? ' · xAI live' : ''}`);
   }, 60);
 
-  rec = { recorder, stream, ctx, chunks, started, timer, mode, live };
+  rec = { recorder, stream, ctx, chunks, started, timer, mode, live, xai };
   micBtn.setAttribute('aria-pressed', 'true');
   renderEngine();
   micBtn.setAttribute('aria-label', 'Finish speaking');
@@ -214,7 +224,7 @@ async function startRecording() {
 }
 
 async function stopRecording() {
-  const { recorder, stream, ctx, chunks, started, timer, mode, live } = rec;
+  const { recorder, stream, ctx, chunks, started, timer, mode, live, xai } = rec;
   rec = null;
   clearInterval(timer);
   const stopped = new Promise((resolve) => (recorder.onstop = resolve));
@@ -230,11 +240,12 @@ async function stopRecording() {
 
   if (performance.now() - started < MIN_TAKE_MS || !chunks.length) {
     if (live) Local.finishTake().catch(() => {});
+    xai?.abort();
     render(); // put the draft back if live text had replaced it
     return setStatus('Too short. Tap and speak, then tap again when done.');
   }
   const blob = new Blob(chunks, { type: recorder.mimeType });
-  await transcribeTake({ blob, mode, live });
+  await transcribeTake({ blob, mode, live, xai });
 }
 
 // Errors are handled when the promise is awaited later; this just stops the
@@ -301,7 +312,7 @@ async function transcribeTake(take) {
   }
 }
 
-async function transcribeWith({ blob, mode, live }) {
+async function transcribeWith({ blob, mode, live, xai }) {
   if (mode === 'local') {
     if (live) {
       await live.ready;
@@ -309,8 +320,15 @@ async function transcribeWith({ blob, mode, live }) {
     }
     return { text: await Local.transcribeBlob(blob, currentText()), via: 'On-device' };
   }
+  if (xai) {
+    try {
+      return { text: await xai.finish(), via: 'xAI' };
+    } catch (err) {
+      console.warn('xAI live transcription failed, sending the recording instead', err);
+    }
+  }
   try {
-    return { text: await transcribe(blob), via: cloudLabel() };
+    return { text: await transcribeCloud(blob), via: cloudLabel() };
   } catch (err) {
     // fetch() throws TypeError when there's no connection at all.
     if (!(err instanceof TypeError) || !Local.isDownloaded()) throw err;
@@ -325,7 +343,12 @@ function showLive(text) {
   $('#placeholder').hidden = true;
 }
 
+function transcribeCloud(blob) {
+  return settings.provider === 'xai' ? Xai.transcribeFile(blob, xaiOptions()) : transcribe(blob);
+}
+
 function cloudLabel() {
+  if (settings.provider === 'xai') return 'xAI';
   try {
     const host = new URL(settings.baseUrl).hostname;
     if (host.includes('groq')) return 'Groq';
@@ -447,8 +470,14 @@ function openSettings() {
     if (form.elements[key]) form.elements[key].value = value;
   }
   updateModelStatus();
+  showProviderFields();
   settingsDialog.showModal();
 }
+
+function showProviderFields() {
+  for (const el of form.querySelectorAll('.provider-fields')) el.hidden = el.dataset.provider !== form.provider.value;
+}
+form.provider.addEventListener('change', showProviderFields);
 
 // ---------- Offline model ----------
 
@@ -500,6 +529,14 @@ window.addEventListener('offline', warmUpIfNeeded);
 
 // Show the Groq endpoint as soon as a Groq key is typed or pasted.
 form.apiKey.addEventListener('input', () => {
+  // An xAI key pasted here belongs in the xAI field.
+  if (form.apiKey.value.trim().startsWith('xai-')) {
+    form.xaiKey.value = form.apiKey.value.trim();
+    form.apiKey.value = '';
+    form.provider.value = 'xai';
+    showProviderFields();
+    return;
+  }
   const s = withProviderDefaults({ apiKey: form.apiKey.value.trim(), baseUrl: form.baseUrl.value.trim(), model: form.model.value.trim() });
   form.baseUrl.value = s.baseUrl;
   form.model.value = s.model;
@@ -515,6 +552,8 @@ settingsDialog.addEventListener('close', () => {
     language: form.language.value.trim(),
     engine: form.engine.value,
     cloudEngine: settings.cloudEngine,
+    provider: form.provider.value,
+    xaiKey: form.xaiKey.value.trim(),
   });
   localStorage.setItem('settings', JSON.stringify(settings));
   toast('Settings saved');
