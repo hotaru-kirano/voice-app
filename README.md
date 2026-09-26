@@ -7,9 +7,8 @@ A focused surface for organizing your thoughts out loud.
 3. **Speak again.** Read it back and say a better version. The new take
    replaces the old one on the surface.
 
-Repeat until the thought is clear. Earlier versions are kept, so a bad take is
-never a loss. Step through them with the ‹ › arrows at the top, or tap **+** to
-start a new draft on a blank surface.
+Repeat until the thought is clear, then tap **Save** to keep it as a note.
+A failed or empty take never touches the draft.
 
 Speech is transcribed by any OpenAI-compatible `/audio/transcriptions`
 endpoint (OpenAI Whisper, Groq, a self-hosted whisper server, …). The app is
@@ -134,8 +133,8 @@ Notes:
   If it fails, the draft is untouched and **Retry** resends the same recording.
   Taps shorter than 0.7 s are ignored.
 - The screen stays awake while recording (Screen Wake Lock API).
-- Everything is stored in the browser's localStorage: the versions (the last
-  200) and your API key. That's fine for a personal app, but don't use it this
+- Everything is stored in the browser's localStorage: the draft, your notes
+  and your API keys. That's fine for a personal app, but don't use it this
   way in an app you share.
 - On a computer, the space bar starts and stops recording.
 
