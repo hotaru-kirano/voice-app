@@ -18,6 +18,11 @@ function load() {
   return (loading ??= Transcriber.load({
     language: 'en',
     modelArch: ModelArch.SmallStreaming,
+    // By default the engine force-ends a line after ~10 s of continuous speech,
+    // and the next line re-reads audio from before the cut, so the words at the
+    // cut came out twice ("…we can't. We can talk…"). With a 60 s limit, lines
+    // end at real pauses, where that overlap is only silence.
+    options: { vad_max_segment_duration: '60' },
     onProgress: (loaded, total) => postMessage({ type: 'progress', loaded, total }),
   }).then(
     (t) => (transcriber = t),

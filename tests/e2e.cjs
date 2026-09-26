@@ -235,9 +235,11 @@ async function testXai(url) {
     let bytes = 0;
     let segStart = 0;
     let segWords = 0;
+    // Finished phrases are re-reported with a slightly shifted start time, as
+    // real services can; the app must replace the phrase, not show it twice.
     const partial = (isFinal) => ws.send(JSON.stringify({
       type: 'transcript.partial', text: Array.from({ length: segWords }, (_, i) => `s${segStart}w${i + 1}`).join(' '),
-      is_final: isFinal, speech_final: isFinal, start: segStart,
+      is_final: isFinal, speech_final: isFinal, start: segStart + (isFinal ? 0.03 : 0), duration: segWords * 0.5,
     }));
     ws.send(JSON.stringify({ type: 'transcript.created' }));
     ws.onMessage((msg) => {
@@ -318,6 +320,7 @@ async function testXai(url) {
   assert.ok(await page.isChecked('input[name=liveText]'));
   await page.uncheck('input[name=liveText]');
   await page.click('#settings button[value="save"]');
+  await page.waitForFunction(() => JSON.parse(localStorage.getItem('settings')).liveText === false);
   const connections = seen.wsUrls.length;
   await page.evaluate(() => {
     const v = JSON.parse(localStorage.getItem('versions'));

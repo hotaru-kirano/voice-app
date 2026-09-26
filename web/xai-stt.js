@@ -43,7 +43,7 @@ async function mintToken(key) {
 export class XaiStream {
   constructor({ key, language, keyterms, onText }) {
     this.onText = onText;
-    this.segments = new Map(); // segment start time -> text
+    this.segments = []; // { start, end, text }, one per stretch of audio
     this.buffer = [];
     this.buffered = 0;
     this.ready = false;
@@ -69,7 +69,7 @@ export class XaiStream {
           this.flush();
           resolve();
         } else if (ev.type === 'transcript.partial') {
-          this.segments.set(ev.start ?? 0, ev.text || '');
+          this.addSegment(ev);
           this.onText?.(this.text());
         } else if (ev.type === 'transcript.done') {
           this.done?.();
@@ -91,12 +91,18 @@ export class XaiStream {
     this.done?.();
   }
 
+  // A new result replaces any earlier one for the same stretch of audio, so a
+  // phrase re-reported with a slightly different start time isn't shown twice.
+  addSegment(ev) {
+    const start = ev.start ?? 0;
+    const end = start + Math.max(ev.duration ?? 0, 0.01);
+    this.segments = this.segments.filter((s) => s.start !== start && !(s.start < end - 0.05 && s.end > start + 0.05));
+    this.segments.push({ start, end, text: ev.text || '' });
+    this.segments.sort((a, b) => a.start - b.start);
+  }
+
   text() {
-    return [...this.segments.entries()]
-      .sort((a, b) => a[0] - b[0])
-      .map(([, t]) => t.trim())
-      .filter(Boolean)
-      .join(' ');
+    return this.segments.map((s) => s.text.trim()).filter(Boolean).join(' ');
   }
 
   // Float32 samples at 16 kHz.
