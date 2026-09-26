@@ -36,6 +36,11 @@ Progressive Web App, so it installs to your home screen.
   there's also **Copy**, **Listen** (with an xAI key) and delete.
 - **Clear** (top left) blanks the draft. If it isn't saved as a note, it asks
   first.
+- **Paste** (top left) puts the clipboard text on the screen as the draft. Tap
+  **Listen** to hear it, then say it in your own words: your take overwrites it
+  like any other, and the pasted text is given to the transcriber as context.
+  If the browser won't share the clipboard, a box opens to paste into by hand.
+  It asks first if the draft on screen isn't saved.
 
 Notes are stored in this browser (localStorage).
 

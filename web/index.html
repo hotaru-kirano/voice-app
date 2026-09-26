@@ -19,6 +19,7 @@
         <span id="saved-count" class="badge" hidden></span>
       </button>
       <button id="clear-btn" class="text-btn" title="Clear the draft">Clear</button>
+      <button id="paste-btn" class="text-btn" title="Put the clipboard text on the screen">Paste</button>
     </div>
     <div class="bar-right">
       <button id="engine-btn" class="engine-pill" aria-pressed="false" title="Switch between cloud and on-device transcription">Cloud</button>
@@ -30,7 +31,7 @@
 
   <main id="surface" class="surface">
     <p id="text" class="text"></p>
-    <p id="placeholder" class="placeholder">Tap the mic and say what’s on your mind.<br>Read it back, then speak again to overwrite it with a better version. Tap Save when you’re happy.</p>
+    <p id="placeholder" class="placeholder">Tap the mic and say what’s on your mind, or tap Paste to bring in text to put in your own words.<br>Read it back, then speak again to overwrite it with a better version. Tap Save when you’re happy.</p>
   </main>
 
   <footer class="dock">
@@ -133,6 +134,18 @@
       </div>
       <p id="saved-empty" class="muted small">No notes yet. When you’re happy with a draft, tap Save.</p>
       <ul id="saved-list" class="saved-list"></ul>
+    </form>
+  </dialog>
+
+  <dialog id="paste-dialog" class="sheet">
+    <form method="dialog">
+      <h2>Paste text</h2>
+      <p class="muted small">Paste the text you want to put in your own words (long-press → Paste).</p>
+      <textarea id="paste-text" rows="8"></textarea>
+      <div class="actions">
+        <button value="cancel" class="btn ghost">Cancel</button>
+        <button value="paste" class="btn primary">Use this text</button>
+      </div>
     </form>
   </dialog>
 

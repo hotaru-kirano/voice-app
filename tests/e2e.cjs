@@ -536,6 +536,37 @@ async function testXai(url) {
   assert.ok(await page.isHidden('#saved-count'));
   assert.strictEqual(await page.textContent('#save-btn'), 'Save');
 
+  // 10b. Paste puts clipboard text on the surface...
+  await page.evaluate(() => navigator.clipboard.writeText('  An article paragraph to rephrase.\r\n'));
+  page.once('dialog', (d) => d.accept()); // the draft on screen isn't saved
+  await page.click('#paste-btn');
+  await page.waitForFunction(() => document.querySelector('#text').textContent === 'An article paragraph to rephrase.');
+  assert.match(await page.textContent('#status'), /^Pasted/);
+  // ...and the next take overwrites it, with the pasted text sent as context.
+  replies.push({ text: 'My own take on the paragraph.' });
+  await take();
+  assert.strictEqual(await text(), 'My own take on the paragraph.');
+  assert.match(requests.at(-1).body, /name="prompt"\r\n\r\nAn article paragraph to rephrase\./);
+  // Pasting over an unsaved draft asks first.
+  await page.evaluate(() => navigator.clipboard.writeText('Second paste'));
+  let asked = new Promise((r) => page.once('dialog', (d) => { d.dismiss(); r(); }));
+  await page.click('#paste-btn');
+  await asked;
+  assert.strictEqual(await text(), 'My own take on the paragraph.');
+  page.once('dialog', (d) => d.accept());
+  await page.click('#paste-btn');
+  await page.waitForFunction(() => document.querySelector('#text').textContent === 'Second paste');
+  // Without clipboard access, a box opens to paste by hand.
+  await page.evaluate(() => { navigator.clipboard.readText = () => Promise.reject(new Error('denied')); });
+  await page.click('#paste-btn');
+  await page.waitForSelector('#paste-dialog[open]');
+  await page.fill('#paste-text', 'Typed by hand');
+  page.once('dialog', (d) => d.accept()); // replaces the unsaved "Second paste"
+  await page.click('#paste-dialog button[value=paste]');
+  await page.waitForFunction(() => document.querySelector('#text').textContent === 'Typed by hand');
+  await page.evaluate(() => localStorage.setItem('draft', ''));
+  await page.reload();
+
   // 11. Pasting a Groq key fills in Groq's endpoint and model.
   await page.evaluate(() => localStorage.setItem('settings', '{}'));
   await page.reload();

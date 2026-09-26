@@ -492,6 +492,40 @@ $('#clear-btn').addEventListener('click', () => {
   toast('Cleared');
 });
 
+// ---------- Paste ----------
+// Puts clipboard text on the surface, e.g. to listen to it and then say it in
+// your own words, which overwrites it like any other take.
+
+const pasteDialog = $('#paste-dialog');
+
+function usePasted(raw) {
+  const text = (raw || '').replace(/\r\n?/g, '\n').trim();
+  if (!text) return toast('Nothing to paste');
+  const current = currentText();
+  if (current && current !== text && !isSaved(current) && !confirm('Replace the current draft? It isn’t saved as a note.')) return;
+  player.stop();
+  setDraft(text);
+  setStatus('Pasted. Tap Listen, then say it your way.');
+}
+
+$('#paste-btn').addEventListener('click', async () => {
+  if (rec || busy) return;
+  try {
+    const text = await navigator.clipboard.readText();
+    if (text.trim()) return usePasted(text);
+  } catch {
+    // No clipboard access (permission denied or unsupported): paste by hand.
+  }
+  $('#paste-text').value = '';
+  pasteDialog.showModal();
+  $('#paste-text').focus();
+});
+
+pasteDialog.addEventListener('close', () => {
+  if (pasteDialog.returnValue === 'paste') usePasted($('#paste-text').value);
+  pasteDialog.returnValue = '';
+});
+
 // ---------- Notes ----------
 // Drafts you chose to keep with Save, newest first.
 
