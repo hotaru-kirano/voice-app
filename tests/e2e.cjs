@@ -439,6 +439,30 @@ async function testXai(url) {
   await page.click('#settings button[value="cancel"]');
   assert.strictEqual(await page.textContent('#engine-btn'), 'Cloud');
 
+  // 0. Draft text is hidden by default; the eye button shows it (remembered).
+  await page.evaluate(() => localStorage.setItem('draft', 'A hidden thought with six words'));
+  await page.reload();
+  assert.ok(await page.isHidden('#text'));
+  assert.strictEqual(await page.textContent('#hidden-note'), 'Draft hidden · 6 words');
+  assert.strictEqual(await page.getAttribute('#eye-btn', 'aria-pressed'), 'false');
+  await page.click('#eye-btn');
+  assert.ok(await page.isVisible('#text'));
+  assert.ok(await page.isHidden('#hidden-note'));
+  await page.reload();
+  assert.ok(await page.isVisible('#text'), 'choice is remembered');
+  await page.click('#eye-btn');
+  assert.ok(await page.isHidden('#text'));
+  // A take while hidden updates the draft without showing it.
+  replies.push({ text: 'Taken while hidden.' });
+  await take();
+  assert.ok(await page.isHidden('#text'));
+  assert.strictEqual(await page.textContent('#hidden-note'), 'Draft hidden · 3 words');
+  assert.strictEqual(await text(), 'Taken while hidden.');
+  await page.click('#eye-btn'); // show text for the rest of the test
+  await page.evaluate(() => localStorage.setItem('draft', ''));
+  await page.reload();
+  requests.length = 0;
+
   // 1. First take fills the surface.
   replies.push({ text: 'I want to plan a trip, maybe Kyoto, not sure when.' });
   await take();

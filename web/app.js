@@ -72,10 +72,28 @@ const textEl = $('#text');
 const micBtn = $('#mic-btn');
 const statusEl = $('#status');
 
+// Draft text is hidden by default so you can focus on speaking; the eye
+// button shows it. Remembered on this device.
+let showText = localStorage.getItem('showText') === '1';
+
+function wordCount(text) {
+  return text.split(/\s+/).filter(Boolean).length;
+}
+
 function render({ fresh = false } = {}) {
   const text = currentText();
   textEl.textContent = text;
+  textEl.hidden = !showText;
   $('#placeholder').hidden = Boolean(text);
+  const note = $('#hidden-note');
+  note.hidden = showText || !text;
+  if (text) {
+    const n = wordCount(text);
+    note.textContent = `Draft hidden · ${n} word${n === 1 ? '' : 's'}`;
+  }
+  const eye = $('#eye-btn');
+  eye.setAttribute('aria-pressed', String(showText));
+  eye.setAttribute('aria-label', showText ? 'Hide draft text' : 'Show draft text');
   $('#copy-btn').disabled = !text;
 
   if (fresh) {
@@ -376,7 +394,27 @@ function showLive(text) {
   textEl.textContent = text;
   textEl.classList.add('live');
   $('#placeholder').hidden = true;
+  if (!showText) {
+    const n = wordCount(text);
+    $('#hidden-note').hidden = false;
+    $('#hidden-note').textContent = `Listening · ${n} word${n === 1 ? '' : 's'}`;
+  }
 }
+
+$('#eye-btn').addEventListener('click', () => {
+  showText = !showText;
+  try {
+    localStorage.setItem('showText', showText ? '1' : '0');
+  } catch {}
+  if (textEl.classList.contains('live')) {
+    // Mid-take: keep showing what's been heard so far, just toggle visibility.
+    textEl.hidden = !showText;
+    $('#hidden-note').hidden = showText;
+    $('#eye-btn').setAttribute('aria-pressed', String(showText));
+    return;
+  }
+  render();
+});
 
 function transcribeCloud(blob) {
   return settings.provider === 'xai' ? Xai.transcribeFile(blob, xaiOptions()) : transcribe(blob);

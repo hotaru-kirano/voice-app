@@ -42,6 +42,11 @@ Progressive Web App, so it installs to your home screen.
   If the browser won't share the clipboard, a box opens to paste into by hand.
   It asks first if the draft on screen isn't saved.
 
+- **Hidden by default.** The draft text is hidden so you can focus on speaking;
+  the screen just shows "Draft hidden · N words". Tap the **eye** (top right)
+  to show or hide it; the choice is remembered. While hidden, live text isn't
+  shown either, and Listen, Save and Copy work as usual.
+
 Notes are stored in this browser (localStorage).
 
 ## Read aloud (xAI Grok text-to-speech)

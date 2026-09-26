@@ -138,6 +138,17 @@ button { cursor: pointer; }
 @keyframes blink { to { visibility: hidden; } }
 .surface.busy .text { opacity: .55; transition: opacity .2s; }
 
+/* Draft text hidden for focus */
+.hidden-note {
+  margin: 20vh 0 0;
+  color: var(--muted);
+  text-align: center;
+  font-size: 1.05rem;
+}
+#eye-btn .icon-eye { display: none; }
+#eye-btn[aria-pressed="true"] .icon-eye { display: block; }
+#eye-btn[aria-pressed="true"] .icon-eye-off { display: none; }
+
 .placeholder {
   margin: 20vh 0 0;
   color: var(--muted);
