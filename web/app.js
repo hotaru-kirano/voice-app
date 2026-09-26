@@ -18,6 +18,7 @@ const DEFAULTS = {
   language: '',
   engine: 'auto', // auto: cloud, on-device when offline | local | cloud
   provider: 'whisper', // cloud service: whisper (Groq, OpenAI, …) | xai
+  liveText: true, // show words while speaking (on-device and xAI)
   xaiKey: '',
 };
 
@@ -184,10 +185,13 @@ async function startRecording() {
   // words arrive.
   let live = null;
   let xai = null;
-  const onText = (text) => text && showLive(text);
+  // With live text off, the draft stays put until you stop. On-device still
+  // streams in the background (it makes the result ready sooner); xAI uses
+  // its batch API instead.
+  const onText = (text) => settings.liveText && text && showLive(text);
   if (mode === 'local') {
     live = { ready: quiet(Local.startTake({ context: currentText(), onText })) };
-  } else if (settings.provider === 'xai') {
+  } else if (settings.provider === 'xai' && settings.liveText) {
     xai = new Xai.XaiStream({ ...xaiOptions(), onText });
   }
   if (live || xai) {
@@ -467,7 +471,10 @@ const form = $('#settings-form');
 
 function openSettings() {
   for (const [key, value] of Object.entries(settings)) {
-    if (form.elements[key]) form.elements[key].value = value;
+    const input = form.elements[key];
+    if (!input) continue;
+    if (input.type === 'checkbox') input.checked = value;
+    else input.value = value;
   }
   updateModelStatus();
   showProviderFields();
@@ -554,6 +561,7 @@ settingsDialog.addEventListener('close', () => {
     cloudEngine: settings.cloudEngine,
     provider: form.provider.value,
     xaiKey: form.xaiKey.value.trim(),
+    liveText: form.liveText.checked,
   });
   localStorage.setItem('settings', JSON.stringify(settings));
   toast('Settings saved');

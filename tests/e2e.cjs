@@ -151,6 +151,23 @@ async function testOnDevice(url) {
   // The draft being revised was given to the engine as context.
   assert.ok(calls.includes('https://stub.test/context?text=Old draft about Kyoto'));
 
+  // 3b. With live text off, the draft stays put until the take is done.
+  await page.evaluate(() => {
+    const s = JSON.parse(localStorage.getItem('settings'));
+    localStorage.setItem('settings', JSON.stringify({ ...s, liveText: false }));
+  });
+  await page.reload();
+  const before = await page.textContent('#text');
+  await take(3000, async () => {
+    assert.strictEqual(await page.textContent('#text'), before);
+    assert.doesNotMatch(await page.getAttribute('#text', 'class'), /\blive\b/);
+  });
+  assert.match(await page.textContent('#text'), /^word1( word\d+)+$/);
+  await page.evaluate(() => {
+    const s = JSON.parse(localStorage.getItem('settings'));
+    localStorage.setItem('settings', JSON.stringify({ ...s, liveText: true }));
+  });
+
   // 4. Auto mode uses the cloud while online...
   await page.evaluate(() => {
     const s = JSON.parse(localStorage.getItem('settings'));
@@ -294,6 +311,26 @@ async function testXai(url) {
   assert.strictEqual(await page.textContent('#text'), 'from the batch api');
   assert.match(await page.textContent('#status'), /^xAI · /);
   assert.strictEqual(seen.batch, 1);
+
+  // 4. With live text off, the draft stays put and xAI's batch API is used.
+  dropConnections = false;
+  await page.click('#settings-btn');
+  assert.ok(await page.isChecked('input[name=liveText]'));
+  await page.uncheck('input[name=liveText]');
+  await page.click('#settings button[value="save"]');
+  const connections = seen.wsUrls.length;
+  await page.evaluate(() => {
+    const v = JSON.parse(localStorage.getItem('versions'));
+    localStorage.setItem('versions', JSON.stringify([...v, { text: 'Keep me visible', at: 9 }]));
+  });
+  await page.reload();
+  await take(2500, async () => {
+    assert.strictEqual(await page.textContent('#text'), 'Keep me visible');
+    assert.doesNotMatch(await page.getAttribute('#text', 'class'), /\blive\b/);
+  });
+  assert.strictEqual(await page.textContent('#text'), 'from the batch api');
+  assert.strictEqual(seen.wsUrls.length, connections, 'no live connection when live text is off');
+  assert.strictEqual(seen.batch, 2);
 
   assert.deepStrictEqual(errors, []);
   await browser.close();

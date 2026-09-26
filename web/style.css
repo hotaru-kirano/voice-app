@@ -217,6 +217,8 @@ button { cursor: pointer; }
   width: 100%;
 }
 .provider-fields { display: grid; gap: 12px; }
+.sheet label.check { display: flex; align-items: center; gap: 10px; }
+.sheet input[type=checkbox] { width: 20px; height: 20px; padding: 0; accent-color: var(--accent); flex: none; }
 .provider-fields[hidden] { display: none; }
 .offline {
   border: 1px solid var(--border);

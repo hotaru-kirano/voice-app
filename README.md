@@ -25,6 +25,16 @@ Progressive Web App, so it installs to your home screen.
    `whisper-large-v3-turbo` model. For another provider, set the base URL and
    model yourself.
 
+## Live text on or off
+
+Settings → **Show words live while speaking** (on by default) controls live
+transcription for both on-device and xAI. Turn it off for a calmer screen: the
+draft you're revising stays put until you tap stop, then the new take replaces
+it.
+- **xAI:** switches to its batch API (the whole recording is sent when you stop).
+- **On-device:** still streams in the background without showing anything, so
+  the result is ready as soon as you stop.
+
 ## xAI Grok realtime (live text from the cloud)
 
 Settings → **Cloud service** → **xAI Grok (realtime, live text)**, then paste

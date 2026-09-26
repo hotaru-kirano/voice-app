@@ -81,6 +81,8 @@
       <label>Language <small class="muted">(optional, e.g. en, ja; xAI defaults to en)</small>
         <input name="language" maxlength="8" placeholder="auto-detect">
       </label>
+      <label class="check"><input type="checkbox" name="liveText"> Show words live while speaking</label>
+      <p class="muted small">Applies to on-device and xAI. Turn it off to keep your current draft on screen until you stop; xAI then uses its batch API.</p>
       <p class="muted small">Your keys stay in this browser and are only sent to the service they belong to.</p>
 
       <fieldset class="offline">
@@ -97,7 +99,7 @@
           <button type="button" id="model-btn" class="btn">Download</button>
         </div>
         <progress id="model-progress" hidden></progress>
-        <p class="muted small">Moonshine v2 Small (streaming), English only. Runs entirely on your phone; the draft updates live as you speak.</p>
+        <p class="muted small">Moonshine v2 Small (streaming), English only. Runs entirely on your phone.</p>
       </fieldset>
       <div class="actions">
         <button value="cancel" formnovalidate class="btn ghost">Cancel</button>
