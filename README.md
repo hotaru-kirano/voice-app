@@ -28,11 +28,12 @@ Progressive Web App, so it installs to your home screen.
 ## Offline (on-device) transcription
 
 The app can also transcribe on your phone, with no internet connection, using
-[Moonshine v2](https://arxiv.org/abs/2602.12241) Small (English only) run by
-[Transformers.js](https://huggingface.co/docs/transformers.js).
+[Moonshine v2](https://arxiv.org/abs/2602.12241) Small (streaming, English only)
+through Moonshine's official WebAssembly package,
+[`@moonshine-ai/moonshine-wasm`](https://www.npmjs.com/package/@moonshine-ai/moonshine-wasm).
 
 1. While online, open Settings → **Offline (on-device)** and tap **Download**
-   (180–300 MB, once; use Wi‑Fi).
+   (once; use Wi‑Fi).
 2. Choose **Transcribe with**:
    - **Cloud, or on-device when offline** (default): uses the cloud API, and
      switches to on-device when the phone is offline or the request can't get
@@ -40,26 +41,24 @@ The app can also transcribe on your phone, with no internet connection, using
    - **Always on-device**: never sends audio anywhere.
    - **Always cloud**.
 
-How it keeps latency low:
-- **Processor.** It uses the GPU (WebGPU, 4-bit model, ~180 MB) when the phone
-  supports it, otherwise the CPU (multi-threaded WebAssembly, full-precision
-  encoder + 8-bit decoder, ~300 MB). "On-device processor: CPU only" forces the
-  CPU. If the GPU fails, the app falls back to the CPU on its own.
-- **Transcribing at pauses.** While you talk, the recording is cut at natural
-  pauses and each piece is transcribed right away, so by the time you tap stop
-  usually only the last few seconds are left.
+How it works:
+- **True streaming.** Audio is fed to the model as you speak, and the draft on
+  screen is **replaced live** with what it hears (a blinking cursor marks live
+  text). When you tap stop, the transcript is usually already final. If the take
+  fails or is empty, the previous draft comes back.
+- **Context.** The draft being revised is given to the engine, which picks
+  names and unusual words out of it and listens for them, so spellings stay
+  consistent between takes.
 - **Timing.** After each take the status line shows what was used and how long
-  it took from tapping stop, e.g. `On-device · GPU · 0.4 s` or `Groq · 0.9 s`.
+  it took from tapping stop, e.g. `On-device · 0.0 s` or `Groq · 0.9 s`.
+- **Runs off the main thread** in a worker (`stt-worker.js`), on the CPU with
+  multi-threaded WebAssembly. The library has no GPU path.
 
 Notes:
 - The browser's noise suppression is turned off for on-device takes. It
-  garbles audio for the on-device model, which was trained on unprocessed
-  speech.
-- The model weights come from
-  [`Workmind/moonshine-streaming-small-ONNX`](https://huggingface.co/Workmind/moonshine-streaming-small-ONNX),
-  a community ONNX export of the official MIT-licensed weights.
+  garbled transcripts in testing.
 - The service worker adds cross-origin isolation headers (GitHub Pages can't),
-  which the CPU path needs to use more than one core. The first visit reloads
+  which the engine needs to use more than one core. The first visit reloads
   itself once to turn them on.
 
 ## Behaviour details
@@ -84,9 +83,9 @@ web/            the app (this is what gets deployed)
   index.html
   style.css
   app.js
-  local-stt.js  on-device transcription: worker wrapper + pause-based chunking
-  stt-worker.js runs Moonshine v2 with Transformers.js (WebGPU or WASM)
-  pcm-worklet.js  passes raw mic samples to the chunker
+  local-stt.js  on-device transcription: main-thread wrapper
+  stt-worker.js runs Moonshine v2 streaming (official WASM package) in a worker
+  pcm-worklet.js  passes raw mic samples to the worker
   sw.js         offline cache + cross-origin isolation headers
   manifest.webmanifest
   icons/

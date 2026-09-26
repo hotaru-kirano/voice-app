@@ -1,21 +1,25 @@
-// Main-thread side of on-device transcription: talks to stt-worker.js and cuts
-// live microphone audio into pieces at natural pauses, so most of a take is
-// already transcribed by the time you stop talking.
+// Main-thread side of on-device transcription: a thin wrapper around
+// stt-worker.js, which runs Moonshine v2 streaming off the main thread.
 
 export const SAMPLE_RATE = 16000;
 
-// ---------- Worker wrapper ----------
+// Flags from the earlier Transformers.js engine, whose model is gone.
+localStorage.removeItem('localModel:webgpu');
+localStorage.removeItem('localModel:wasm');
 
 let worker = null;
 let nextId = 0;
 const pending = new Map();
 const progressListeners = new Set();
+let textListener = null;
 
 function getWorker() {
   if (worker) return worker;
   worker = new Worker(new URL('stt-worker.js', import.meta.url), { type: 'module' });
   worker.onmessage = ({ data }) => {
     if (data.type === 'progress') return progressListeners.forEach((fn) => fn(data));
+    if (data.type === 'text') return textListener?.(data.text);
+    if (data.type === 'streamError') return console.warn('On-device transcription:', data.message);
     const p = pending.get(data.id);
     if (!p) return;
     pending.delete(data.id);
@@ -30,11 +34,11 @@ function getWorker() {
   return worker;
 }
 
-function call(msg, transfer) {
+function call(msg) {
   const id = ++nextId;
   return new Promise((resolve, reject) => {
     pending.set(id, { resolve, reject });
-    getWorker().postMessage({ ...msg, id }, transfer);
+    getWorker().postMessage({ ...msg, id });
   });
 }
 
@@ -43,122 +47,53 @@ export function onProgress(fn) {
   return () => progressListeners.delete(fn);
 }
 
-// Downloads (first time) and loads the model. `device` is the preference:
-// 'auto' (GPU if available) or 'cpu'. Resolves with the device actually used.
-export async function load(device) {
-  const { device: used } = await call({ type: 'load', device });
-  markDownloaded(used);
-  return used;
+// Downloads (first time) and loads the model.
+export async function load() {
+  await call({ type: 'load' });
+  localStorage.setItem('localModel', '1');
 }
 
-export function transcribe(audio, device) {
-  const result = call({ type: 'transcribe', audio, device }, [audio.buffer]);
-  result.then((r) => markDownloaded(r.device), () => {});
-  return result;
+export function isDownloaded() {
+  return localStorage.getItem('localModel') === '1';
 }
 
-// GPU and CPU use different model files, so they're tracked separately.
-function markDownloaded(used) {
-  localStorage.setItem(`localModel:${used}`, '1');
+// ---------- Live takes ----------
+
+// Starts streaming transcription. `onText` gets the whole transcript so far,
+// every time it changes. Returns a promise that settles once the take has
+// started (rejects if the model can't load).
+export function startTake({ context, onText }) {
+  textListener = onText;
+  return call({ type: 'start', context });
 }
 
-export function downloadedOn() {
-  return ['webgpu', 'wasm'].filter((d) => localStorage.getItem(`localModel:${d}`));
+// Feeds 16 kHz mono samples. Cheap; call as often as audio arrives.
+export function addAudio(pcm) {
+  if (!worker) return;
+  worker.postMessage({ type: 'audio', pcm }, [pcm.buffer]);
 }
 
-export function isDownloaded(device) {
-  const on = downloadedOn();
-  return device === 'cpu' ? on.includes('wasm') : on.length > 0;
-}
-
-// ---------- Pause-based chunking ----------
-
-const FRAME = SAMPLE_RATE / 50; // 20 ms
-const MIN_CHUNK = SAMPLE_RATE * 3; // don't cut pieces shorter than 3 s
-const MAX_CHUNK = SAMPLE_RATE * 20; // always cut by 20 s
-const PAUSE_FRAMES = 20; // 400 ms of quiet counts as a pause
-
-export class Chunker {
-  constructor(onChunk) {
-    this.onChunk = onChunk;
-    this.parts = [];
-    this.length = 0;
-    this.frameLevels = []; // RMS per 20 ms frame of the current chunk
-    this.carry = new Float32Array(0);
-    this.floor = 0.002;
-  }
-
-  push(samples) {
-    this.parts.push(samples);
-    this.length += samples.length;
-
-    // Measure loudness per 20 ms frame.
-    let buf = this.carry.length ? concat([this.carry, samples]) : samples;
-    let i = 0;
-    for (; i + FRAME <= buf.length; i += FRAME) {
-      let sum = 0;
-      for (let j = i; j < i + FRAME; j++) sum += buf[j] * buf[j];
-      const rms = Math.sqrt(sum / FRAME);
-      this.frameLevels.push(rms);
-      // Background-noise estimate: drops quickly in quiet moments, creeps up
-      // very slowly otherwise, so sustained speech never counts as "noise".
-      this.floor += (rms - this.floor) * (rms < this.floor ? 0.1 : 0.0005);
-    }
-    this.carry = buf.slice(i);
-
-    if (this.length < MIN_CHUNK) return;
-    const quiet = Math.max(this.floor * 2, 0.004);
-    const recent = this.frameLevels.slice(-PAUSE_FRAMES);
-    if (recent.length === PAUSE_FRAMES && recent.every((v) => v < quiet)) {
-      // Cut in the middle of the pause.
-      this.cut(this.length - (PAUSE_FRAMES / 2) * FRAME);
-    } else if (this.length >= MAX_CHUNK) {
-      // No pause: cut at the quietest point of the last 2 seconds.
-      const window = this.frameLevels.slice(-100);
-      const quietest = window.indexOf(Math.min(...window));
-      this.cut(this.length - (window.length - quietest) * FRAME);
-    }
-  }
-
-  // Whether the current chunk has anything louder than background noise, so
-  // stretches of silence (thinking pauses) are never sent to the model.
-  hasSpeech() {
-    const loud = Math.max(this.floor * 4, 0.01);
-    return this.frameLevels.some((v) => v > loud);
-  }
-
-  cut(at) {
-    const all = concat(this.parts);
-    const speech = this.hasSpeech();
-    this.parts = [all.slice(at)];
-    this.length = all.length - at;
-    this.frameLevels = [];
-    if (speech) this.onChunk(all.slice(0, at));
-  }
-
-  // Returns whatever hasn't been sent yet, or null if it's only silence.
-  flush() {
-    const rest = concat(this.parts);
-    const speech = this.hasSpeech();
-    this.parts = [];
-    this.length = 0;
-    this.frameLevels = [];
-    return speech ? rest : null;
+// Ends the take and resolves with the final transcript.
+export async function finishTake() {
+  try {
+    const { text } = await call({ type: 'stop' });
+    localStorage.setItem('localModel', '1');
+    return text;
+  } finally {
+    textListener = null;
   }
 }
 
-export function concat(arrays) {
-  const out = new Float32Array(arrays.reduce((n, a) => n + a.length, 0));
-  let offset = 0;
-  for (const a of arrays) {
-    out.set(a, offset);
-    offset += a.length;
-  }
-  return out;
+// ---------- Whole recordings ----------
+
+export async function transcribeBlob(blob, context) {
+  const pcm = await decodeToPcm(blob);
+  const { text } = await call({ type: 'transcribe', pcm, context });
+  return text;
 }
 
 // Decodes a recorded blob (webm/opus etc.) to 16 kHz mono samples.
-export async function decodeToPcm(blob) {
+async function decodeToPcm(blob) {
   const ctx = new AudioContext();
   try {
     const buf = await ctx.decodeAudioData(await blob.arrayBuffer());

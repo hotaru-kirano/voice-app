@@ -47,37 +47,57 @@ function makeWav(name, pattern = [[3, 1]]) {
   return file;
 }
 
-// A stand-in for Transformers.js, so the test doesn't download the real model.
-// Every call to the "model" is reported to https://stub.test so the test can
-// see when it happened. Silent input (the warm-up) returns no text.
-const STUB_TRANSFORMERS = `
-  export const env = {};
-  let n = 0;
-  export async function pipeline(task, model, opts) {
-    await fetch('https://stub.test/load?device=' + opts.device + '&encoder=' + opts.dtype.encoder_model);
-    opts.progress_callback?.({ status: 'progress', file: 'encoder', loaded: 50, total: 100 });
-    opts.progress_callback?.({ status: 'done', file: 'encoder', loaded: 100, total: 100 });
-    return async (audio) => {
-      if (!audio.some((v) => Math.abs(v) > 0.01)) return { text: '' };
-      n++;
-      await fetch('https://stub.test/call?n=' + n + '&seconds=' + (audio.length / 16000).toFixed(2));
-      return { text: 'piece' + n };
-    };
-  }
+// A stand-in for the Moonshine WASM package, so the test doesn't download the
+// real model. The fake stream "hears" one word per second of loud audio and
+// reports its transcript as it grows. Calls are reported to https://stub.test
+// so the test can check them.
+const STUB_MOONSHINE = `
+  export const ModelArch = { SmallStreaming: 4 };
+  const report = (what) => fetch('https://stub.test/' + what);
+  const loudSeconds = (pcm) => pcm.filter((v) => Math.abs(v) > 0.05).length / 16000 / 0.6;
+  export const Transcriber = {
+    async load(opts) {
+      await report('load?arch=' + opts.modelArch);
+      opts.onProgress?.(50, 100);
+      opts.onProgress?.(100, 100);
+      return {
+        setContext(context) { report('context?text=' + encodeURIComponent(context)); },
+        transcribe(pcm) {
+          const n = Math.round(loudSeconds(pcm));
+          return { lines: n ? [{ text: Array.from({ length: n }, (_, i) => 'word' + (i + 1)).join(' ') }] : [] };
+        },
+        createStream() {
+          let heard = 0;
+          let listener = null;
+          const emit = () => {
+            const n = Math.round(heard);
+            if (n) listener?.onLineTextChanged?.({ line: { id: '1', text: Array.from({ length: n }, (_, i) => 'word' + (i + 1)).join(' ') } });
+          };
+          return {
+            addListener(l) { listener = l; },
+            start() {},
+            addAudio(pcm) { heard += loudSeconds(pcm); },
+            transcribe() { emit(); },
+            stop() { emit(); },
+            close() {},
+          };
+        },
+      };
+    },
+  };
 `;
 
 async function testOnDevice(url) {
-  // Speech-like bursts with pauses, so takes get cut into pieces.
-  const wav = makeWav('pauses', [[2.4, 1], [0.8, 0], [2.4, 1], [0.8, 0], [2.4, 1], [1.2, 0]]);
+  const wav = makeWav('speech', [[6, 1], [1, 0]]);
   const browser = await chromium.launch({
     args: ['--use-fake-ui-for-media-stream', '--use-fake-device-for-media-stream', `--use-file-for-fake-audio-capture=${wav}`],
   });
   const context = await browser.newContext({ permissions: ['microphone'], serviceWorkers: 'block' });
   const calls = [];
   await context.route('https://cdn.jsdelivr.net/**', (route) =>
-    route.fulfill({ contentType: 'text/javascript', headers: { 'access-control-allow-origin': '*' }, body: STUB_TRANSFORMERS }));
+    route.fulfill({ contentType: 'text/javascript', headers: { 'access-control-allow-origin': '*' }, body: STUB_MOONSHINE }));
   await context.route('https://stub.test/**', (route) => {
-    calls.push({ url: route.request().url(), at: Date.now() });
+    calls.push(decodeURIComponent(route.request().url()));
     route.fulfill({ status: 204, headers: { 'access-control-allow-origin': '*' } });
   });
   let cloudDown = false;
@@ -87,7 +107,7 @@ async function testOnDevice(url) {
   });
   await context.addInitScript(() => {
     if (!localStorage.getItem('settings')) {
-      localStorage.setItem('settings', JSON.stringify({ apiKey: 'test-key', baseUrl: 'https://api.example.test/v1', engine: 'local', device: 'cpu' }));
+      localStorage.setItem('settings', JSON.stringify({ apiKey: 'test-key', baseUrl: 'https://api.example.test/v1', engine: 'local' }));
     }
   });
   const page = await context.newPage();
@@ -95,14 +115,13 @@ async function testOnDevice(url) {
   page.on('pageerror', (e) => errors.push(e.message));
   await page.goto(url);
 
-  async function take(ms) {
+  async function take(ms, during) {
     await page.click('#mic-btn');
     await page.waitForSelector('#mic-btn[aria-pressed="true"]');
     await page.waitForTimeout(ms);
-    const stoppedAt = Date.now();
+    await during?.();
     await page.click('#mic-btn');
     await page.waitForSelector('#mic-btn:not(.busy)[aria-pressed="false"]');
-    return stoppedAt;
   }
 
   // 1. Always on-device, but the model was never downloaded: send to Settings.
@@ -112,19 +131,25 @@ async function testOnDevice(url) {
 
   // 2. Download from Settings.
   await page.click('#model-btn');
-  await page.waitForFunction(() => /Downloaded \(CPU\)/.test(document.querySelector('#model-status').textContent));
-  assert.match(await page.textContent('#model-status'), /Using the CPU/);
-  assert.ok(calls.some((c) => c.url.includes('/load?device=wasm&encoder=fp32')));
+  await page.waitForFunction(() => /^Downloaded/.test(document.querySelector('#model-status').textContent));
+  assert.ok(calls.some((c) => c.endsWith('/load?arch=4')));
   await page.click('#settings button[value="cancel"]');
 
-  // 3. A take is transcribed piece by piece while recording.
-  const before = calls.filter((c) => c.url.includes('/call')).length;
-  const stoppedAt = await take(7000);
-  const takeCalls = calls.filter((c) => c.url.includes('/call')).slice(before);
-  assert.ok(takeCalls.length >= 2, `expected several pieces, got ${takeCalls.length}`);
-  assert.ok(takeCalls[0].at < stoppedAt, 'first piece should be transcribed before stopping');
-  assert.match(await page.textContent('#text'), /^piece\d+( piece\d+)+$/);
-  assert.match(await page.textContent('#status'), /^On-device · CPU · \d+\.\d s$/);
+  // 3. The draft is replaced live while speaking, then kept when done.
+  await page.evaluate(() => {
+    localStorage.setItem('versions', JSON.stringify([{ text: 'Old draft about Kyoto', at: 1 }]));
+  });
+  await page.reload();
+  await take(4000, async () => {
+    assert.match(await page.getAttribute('#text', 'class'), /\blive\b/);
+    assert.match(await page.textContent('#text'), /^word1( word\d+)*$/);
+  });
+  assert.match(await page.textContent('#text'), /^word1( word\d+)+$/);
+  assert.doesNotMatch(await page.getAttribute('#text', 'class'), /\blive\b/);
+  assert.strictEqual(await page.textContent('#version'), '2 / 2');
+  assert.match(await page.textContent('#status'), /^On-device · \d+\.\d s$/);
+  // The draft being revised was given to the engine as context.
+  assert.ok(calls.includes('https://stub.test/context?text=Old draft about Kyoto'));
 
   // 4. Auto mode uses the cloud while online...
   await page.evaluate(() => {
@@ -138,16 +163,15 @@ async function testOnDevice(url) {
 
   // 5. ...falls back to on-device when the request can't get through...
   cloudDown = true;
-  await take(3500);
-  assert.match(await page.textContent('#text'), /^piece\d+/);
-  assert.match(await page.textContent('#status'), /^On-device · CPU \(no connection\) · /);
+  await take(3000);
+  assert.match(await page.textContent('#text'), /^word1/);
+  assert.match(await page.textContent('#status'), /^On-device \(no connection\) · /);
 
-  // 6. ...and goes straight to on-device when the phone is offline.
+  // 6. ...and streams on-device when the phone is offline.
   cloudDown = false;
   await page.evaluate(() => Object.defineProperty(Navigator.prototype, 'onLine', { get: () => false }));
-  await take(3500);
-  assert.match(await page.textContent('#text'), /^piece\d+/);
-  assert.match(await page.textContent('#status'), /^On-device · CPU · /);
+  await take(3000, async () => assert.match(await page.getAttribute('#text', 'class'), /\blive\b/));
+  assert.match(await page.textContent('#status'), /^On-device · /);
 
   assert.deepStrictEqual(errors, []);
   await browser.close();

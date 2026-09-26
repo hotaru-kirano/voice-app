@@ -2,12 +2,14 @@
 // - App files: network-first, so updates show up on the next reload; falls back
 //   to the cache when offline.
 // - The on-device speech library (versioned CDN URLs): cache-first.
-// - Model weights are cached by Transformers.js itself ("transformers-cache");
-//   this worker never touches that cache.
+// - Model weights are cached by the Moonshine library itself
+//   ("moonshine-models-v1"); this worker never touches that cache.
 // It also adds cross-origin isolation headers so the on-device model can use
 // all CPU cores (SharedArrayBuffer), which GitHub Pages can't set itself.
-const APP_CACHE = 'voice-drafts-v5';
-const CDN_CACHE = 'voice-drafts-cdn';
+const APP_CACHE = 'voice-drafts-v6';
+const CDN_CACHE = 'voice-drafts-cdn-v2';
+// Left behind by the earlier Transformers.js engine (~300 MB of model files).
+const OBSOLETE = ['transformers-cache'];
 const ASSETS = [
   './',
   'index.html',
@@ -33,7 +35,7 @@ self.addEventListener('activate', (event) => {
       .then((keys) =>
         Promise.all(
           keys
-            .filter((k) => k.startsWith('voice-') && k !== APP_CACHE && k !== CDN_CACHE)
+            .filter((k) => (k.startsWith('voice-') && k !== APP_CACHE && k !== CDN_CACHE) || OBSOLETE.includes(k))
             .map((k) => caches.delete(k)),
         ),
       )

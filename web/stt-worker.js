@@ -1,137 +1,125 @@
-// On-device speech-to-text with Moonshine v2 (Small), run by Transformers.js.
-// Uses the GPU through WebGPU when available, otherwise multi-threaded WASM.
-// Everything it downloads is cached by the browser, so it works offline after
-// the first load.
+// On-device, streaming speech-to-text with Moonshine v2 Small, using the
+// official WebAssembly package. Runs off the main thread; everything it
+// downloads is cached by the browser, so it works offline after the first load.
 
-import { pipeline, env } from 'https://cdn.jsdelivr.net/npm/@huggingface/transformers@4.3.0/dist/transformers.min.js';
+import { Transcriber, ModelArch } from 'https://cdn.jsdelivr.net/npm/@moonshine-ai/moonshine-wasm@0.1.5/dist/index.js';
 
-const MODEL = 'Workmind/moonshine-streaming-small-ONNX';
-// GPU: 4-bit weights (~180 MB), transcripts match full precision.
-// CPU: full-precision encoder + 8-bit decoder (~300 MB); an 8-bit encoder is
-// faster but noticeably less accurate.
-const DTYPES = {
-  webgpu: { encoder_model: 'q4', decoder_model_merged: 'q4' },
-  wasm: { encoder_model: 'fp32', decoder_model_merged: 'q8' },
+let transcriber = null;
+let loading = null;
+let stream = null;
+let lines = new Map(); // line id -> text, in the order lines started
+let passScheduled = false;
+// Audio that arrives while a take is still starting (e.g. the model is still
+// loading) is held here so the beginning of what you said isn't lost.
+let starting = false;
+let early = [];
+
+function load() {
+  return (loading ??= Transcriber.load({
+    language: 'en',
+    modelArch: ModelArch.SmallStreaming,
+    onProgress: (loaded, total) => postMessage({ type: 'progress', loaded, total }),
+  }).then(
+    (t) => (transcriber = t),
+    (err) => {
+      loading = null;
+      throw err;
+    },
+  ));
+}
+
+function currentText() {
+  return [...lines.values()].map((t) => t.trim()).filter(Boolean).join(' ');
+}
+
+function onLine({ line }) {
+  lines.set(line.id, line.text);
+  postMessage({ type: 'text', text: currentText() });
+}
+
+// Audio arrives in small pieces; run at most one transcription pass at a time
+// over whatever has arrived since the last one.
+function schedulePass() {
+  if (passScheduled) return;
+  passScheduled = true;
+  setTimeout(() => {
+    passScheduled = false;
+    try {
+      stream?.transcribe();
+    } catch (err) {
+      postMessage({ type: 'streamError', message: err?.message || String(err) });
+    }
+  }, 0);
+}
+
+const handlers = {
+  async load() {
+    await load();
+  },
+
+  // Starts a live take. `context` is the draft being revised: the engine picks
+  // names and unusual words out of it and listens for them.
+  async start({ context }) {
+    await load();
+    try {
+      transcriber.setContext(context || '');
+    } catch {}
+    stream?.close();
+    lines = new Map();
+    stream = transcriber.createStream({ updateInterval: 0.5 });
+    stream.addListener({ onLineTextChanged: onLine, onLineCompleted: onLine });
+    stream.start();
+    for (const pcm of early) stream.addAudio(pcm, 16000);
+    early = [];
+    starting = false;
+    schedulePass();
+  },
+
+  audio({ pcm }) {
+    if (!stream) {
+      if (starting) early.push(pcm);
+      return;
+    }
+    stream.addAudio(pcm, 16000);
+    schedulePass();
+  },
+
+  // Finishes the take and returns the final transcript.
+  async stop() {
+    starting = false;
+    early = [];
+    if (!stream) return { text: '' };
+    stream.stop(); // flushes a final pass
+    const text = currentText();
+    stream.close();
+    stream = null;
+    return { text };
+  },
+
+  // Whole recording at once (used when the cloud request fails, and for retry).
+  async transcribe({ pcm, context }) {
+    await load();
+    try {
+      transcriber.setContext(context || '');
+    } catch {}
+    const result = transcriber.transcribe(pcm, { sampleRate: 16000 });
+    return { text: result.lines.map((l) => l.text.trim()).filter(Boolean).join(' ') };
+  },
 };
 
-env.allowLocalModels = false;
-
-let asr = null;
-let device = null;
-let loading = null;
-let loadedFor = null; // the preference the current model was loaded for
-
-async function gpuAvailable() {
-  try {
-    return Boolean(navigator.gpu && (await navigator.gpu.requestAdapter()));
-  } catch {
-    return false;
-  }
-}
-
-async function loadAs(dev) {
-  const files = new Map();
-  const model = await pipeline('automatic-speech-recognition', MODEL, {
-    device: dev,
-    dtype: DTYPES[dev],
-    progress_callback: (p) => {
-      if (p.status !== 'progress' && p.status !== 'done') return;
-      files.set(p.file, { loaded: p.loaded ?? p.total ?? 0, total: p.total ?? 0 });
-      let loaded = 0;
-      let total = 0;
-      for (const f of files.values()) {
-        loaded += f.loaded;
-        total += f.total;
-      }
-      postMessage({ type: 'progress', loaded, total });
-    },
-  });
-  // Warm up so the first real take isn't slowed by one-time setup.
-  await model(new Float32Array(16000));
-  asr = model;
-  device = dev;
-}
-
-function load(preference) {
-  if (preference !== loadedFor) {
-    loading = null;
-    loadedFor = preference;
-  }
-  return (loading ??= (async () => {
-    if (preference !== 'cpu' && (await gpuAvailable())) {
-      try {
-        return await loadAs('webgpu');
-      } catch (err) {
-        console.warn('WebGPU failed, using CPU', err);
-      }
-    }
-    await loadAs('wasm');
-  })().catch((err) => {
-    loading = null;
-    throw err;
-  }));
-}
-
-// Cuts silence from both ends, keeping a short margin. The model can return
-// nothing at all when a clip starts with a long pause.
-function trimSilence(audio) {
-  const FRAME = 320; // 20 ms
-  const levels = [];
-  for (let i = 0; i + FRAME <= audio.length; i += FRAME) {
-    let sum = 0;
-    for (let j = i; j < i + FRAME; j++) sum += audio[j] * audio[j];
-    levels.push(Math.sqrt(sum / FRAME));
-  }
-  if (!levels.length) return audio;
-  const sorted = [...levels].sort((a, b) => a - b);
-  const noise = sorted[Math.floor(sorted.length * 0.1)];
-  const peak = sorted[sorted.length - 1];
-  const threshold = Math.max(noise * 3, peak * 0.05, 1e-3);
-  const first = levels.findIndex((v) => v > threshold);
-  if (first < 0) return audio;
-  let last = levels.length - 1;
-  while (levels[last] <= threshold) last--;
-  const start = Math.max(0, (first - 10) * FRAME); // keep 200 ms before
-  const end = Math.min(audio.length, (last + 16) * FRAME); // and 300 ms after
-  return audio.subarray(start, end);
-}
-
-async function transcribe(input) {
-  const audio = trimSilence(input);
-  // The v2 audio frontend works in 5 ms frames (80 samples at 16 kHz), so pad
-  // to whole frames. Dither the padding and any digital silence slightly.
-  const padded = new Float32Array(Math.ceil(audio.length / 80) * 80);
-  padded.set(audio);
-  for (let i = 0; i < padded.length; i++) padded[i] += (Math.random() - 0.5) * 2e-4;
-  try {
-    return (await asr(padded)).text.trim();
-  } catch (err) {
-    if (device !== 'webgpu') throw err;
-    // Some mobile GPUs fail at run time; fall back to the CPU for good.
-    console.warn('WebGPU inference failed, switching to CPU', err);
-    loading = null;
-    asr = null;
-    loading = loadAs('wasm');
-    await loading;
-    return (await asr(padded)).text.trim();
-  }
-}
-
-// Requests are handled one at a time, in order.
+// Requests are handled in order; audio is cheap and handled immediately.
 let queue = Promise.resolve();
 
 onmessage = ({ data }) => {
+  if (data.type === 'audio') return handlers.audio(data);
+  if (data.type === 'start') {
+    starting = true;
+    early = [];
+  }
   queue = queue.then(async () => {
     try {
-      if (data.type === 'load') {
-        await load(data.device);
-        postMessage({ type: 'ready', id: data.id, device });
-      } else if (data.type === 'transcribe') {
-        await load(data.device);
-        const started = performance.now();
-        const text = await transcribe(data.audio);
-        postMessage({ type: 'result', id: data.id, text, ms: performance.now() - started, device });
-      }
+      const result = (await handlers[data.type](data)) || {};
+      postMessage({ type: 'ok', id: data.id, ...result });
     } catch (err) {
       postMessage({ type: 'error', id: data.id, message: err?.message || String(err) });
     }

@@ -15,7 +15,6 @@ const DEFAULTS = {
   model: 'whisper-1',
   language: '',
   engine: 'auto', // auto: cloud, on-device when offline | local | cloud
-  device: 'auto', // on-device processor: auto (GPU if available) | cpu
 };
 
 function loadJSON(key, fallback) {
@@ -127,7 +126,7 @@ function cloudConfigured() {
 
 // Picks cloud or on-device for a take, or explains why neither works.
 function chooseMode() {
-  const local = Local.isDownloaded(settings.device);
+  const local = Local.isDownloaded();
   if (settings.engine === 'local') return local ? 'local' : 'need-model';
   if (settings.engine === 'cloud') return cloudConfigured() ? 'cloud' : 'need-key';
   if (local && (!navigator.onLine || !cloudConfigured())) return 'local';
@@ -171,21 +170,29 @@ async function startRecording() {
   source.connect(analyser);
   const samples = new Float32Array(analyser.fftSize);
 
-  // On-device: transcribe each piece at a pause while you keep talking.
-  const pieces = [];
-  let chunker = null;
+  // On-device: stream audio to the model, and replace the draft live with
+  // what it hears. The previous draft stays until the first words arrive.
+  let live = null;
   if (mode === 'local') {
-    Local.load(settings.device).catch(() => {}); // warm up during the take
-    chunker = new Local.Chunker((audio) => pieces.push(quiet(Local.transcribe(audio, settings.device))));
+    live = { text: '', ready: null };
+    live.ready = Local.startTake({
+      context: currentText(),
+      onText: (text) => {
+        live.text = text;
+        if (text) showLive(text);
+      },
+    });
+    quiet(live.ready);
     try {
       await ctx.audioWorklet.addModule('pcm-worklet.js');
       const tap = new AudioWorkletNode(ctx, 'pcm-tap');
-      tap.port.onmessage = ({ data }) => chunker.push(data);
+      tap.port.onmessage = ({ data }) => Local.addAudio(data);
       const mute = ctx.createGain();
       mute.gain.value = 0;
       source.connect(tap).connect(mute).connect(ctx.destination);
     } catch {
-      chunker = null; // fall back to transcribing the whole take at the end
+      live = null; // no live audio: transcribe the whole recording at the end
+      Local.finishTake().catch(() => {});
     }
   }
 
@@ -198,7 +205,7 @@ async function startRecording() {
     setStatus(`Recording ${formatDuration(performance.now() - started)}${mode === 'local' ? ' · on-device' : ''}`);
   }, 60);
 
-  rec = { recorder, stream, ctx, chunks, started, timer, mode, chunker, pieces };
+  rec = { recorder, stream, ctx, chunks, started, timer, mode, live };
   micBtn.setAttribute('aria-pressed', 'true');
   micBtn.setAttribute('aria-label', 'Finish speaking');
   setStatus('Recording 0:00');
@@ -206,7 +213,7 @@ async function startRecording() {
 }
 
 async function stopRecording() {
-  const { recorder, stream, ctx, chunks, started, timer, mode, chunker, pieces } = rec;
+  const { recorder, stream, ctx, chunks, started, timer, mode, live } = rec;
   rec = null;
   clearInterval(timer);
   const stopped = new Promise((resolve) => (recorder.onstop = resolve));
@@ -220,20 +227,16 @@ async function stopRecording() {
   micBtn.style.setProperty('--level', 0);
 
   if (performance.now() - started < MIN_TAKE_MS || !chunks.length) {
+    if (live) Local.finishTake().catch(() => {});
+    render(); // put the draft back if live text had replaced it
     return setStatus('Too short. Tap and speak, then tap again when done.');
   }
   const blob = new Blob(chunks, { type: recorder.mimeType });
-  if (chunker) {
-    const rest = chunker.flush();
-    if (rest) pieces.push(quiet(Local.transcribe(rest, settings.device)));
-    await transcribeTake({ blob, mode, pieces });
-  } else {
-    await transcribeTake({ blob, mode });
-  }
+  await transcribeTake({ blob, mode, live });
 }
 
-// Errors are handled when the pieces are awaited; this just stops the browser
-// reporting them as unhandled in the meantime.
+// Errors are handled when the promise is awaited later; this just stops the
+// browser reporting them as unhandled in the meantime.
 function quiet(promise) {
   promise.catch(() => {});
   return promise;
@@ -277,13 +280,17 @@ async function transcribeTake(take) {
     const { text, via } = await transcribeWith(take);
     failedTake = null;
     const secs = ((performance.now() - started) / 1000).toFixed(1);
+    textEl.classList.remove('live');
     if (text) {
       addVersion(text);
       setStatus(`${via} · ${secs} s`);
     } else {
+      render();
       setStatus('Didn’t catch anything. Your draft is unchanged.');
     }
   } catch (err) {
+    textEl.classList.remove('live');
+    render();
     failedTake = take.blob;
     setStatus(`Transcription failed: ${err.message}`, true);
   } finally {
@@ -292,38 +299,28 @@ async function transcribeTake(take) {
   }
 }
 
-async function transcribeWith({ blob, mode, pieces }) {
+async function transcribeWith({ blob, mode, live }) {
   if (mode === 'local') {
-    const results = pieces ? await Promise.all(pieces) : await transcribeLocally(blob);
-    return { text: joinPieces(results), via: localLabel(results) };
+    if (live) {
+      await live.ready;
+      return { text: await Local.finishTake(), via: 'On-device' };
+    }
+    return { text: await Local.transcribeBlob(blob, currentText()), via: 'On-device' };
   }
   try {
     return { text: await transcribe(blob), via: cloudLabel() };
   } catch (err) {
     // fetch() throws TypeError when there's no connection at all.
-    if (!(err instanceof TypeError) || !Local.isDownloaded(settings.device)) throw err;
-    const results = await transcribeLocally(blob);
-    return { text: joinPieces(results), via: `${localLabel(results)} (no connection)` };
+    if (!(err instanceof TypeError) || !Local.isDownloaded()) throw err;
+    return { text: await Local.transcribeBlob(blob, currentText()), via: 'On-device (no connection)' };
   }
 }
 
-async function transcribeLocally(blob) {
-  const pcm = await Local.decodeToPcm(blob);
-  const audio = [];
-  const chunker = new Local.Chunker((a) => audio.push(a));
-  for (let i = 0; i < pcm.length; i += Local.SAMPLE_RATE) chunker.push(pcm.slice(i, i + Local.SAMPLE_RATE));
-  const rest = chunker.flush();
-  if (rest) audio.push(rest);
-  return Promise.all(audio.map((a) => Local.transcribe(a, settings.device)));
-}
-
-function joinPieces(results) {
-  return results.map((r) => r.text).filter(Boolean).join(' ').replace(/\s+/g, ' ').trim();
-}
-
-function localLabel(results) {
-  const dev = results.find((r) => r.device)?.device;
-  return dev ? `On-device · ${dev === 'webgpu' ? 'GPU' : 'CPU'}` : 'On-device';
+// Shows the take's transcript so far in place of the draft.
+function showLive(text) {
+  textEl.textContent = text;
+  textEl.classList.add('live');
+  $('#placeholder').hidden = true;
 }
 
 function cloudLabel() {
@@ -418,19 +415,13 @@ function openSettings() {
 
 // ---------- Offline model ----------
 
-const DEVICE_NAMES = { webgpu: 'GPU', wasm: 'CPU' };
-
 function updateModelStatus() {
-  const on = Local.downloadedOn();
-  const wanted = form.device.value;
-  const ready = Local.isDownloaded(wanted);
+  const ready = Local.isDownloaded();
   $('#model-status').textContent = ready
-    ? `Downloaded (${on.map((d) => DEVICE_NAMES[d]).join(' + ')}). Works offline.`
-    : 'Not downloaded yet. 180–300 MB, so use Wi‑Fi.';
+    ? 'Downloaded. Works offline.'
+    : 'Not downloaded yet. Use Wi‑Fi for the download.';
   $('#model-btn').textContent = ready ? 'Test' : 'Download';
 }
-
-form.device.addEventListener('change', updateModelStatus);
 
 let removeProgress = null;
 $('#model-btn').addEventListener('click', async () => {
@@ -451,9 +442,9 @@ $('#model-btn').addEventListener('click', async () => {
   navigator.storage?.persist?.().catch(() => {});
   try {
     const t = performance.now();
-    const used = await Local.load(form.device.value);
+    await Local.load();
     updateModelStatus();
-    $('#model-status').textContent += ` Using the ${DEVICE_NAMES[used]}, ready in ${((performance.now() - t) / 1000).toFixed(1)} s.`;
+    $('#model-status').textContent += ` Ready in ${((performance.now() - t) / 1000).toFixed(1)} s.`;
   } catch (err) {
     $('#model-status').textContent = `Download failed: ${err.message}`;
   } finally {
@@ -466,7 +457,7 @@ $('#model-btn').addEventListener('click', async () => {
 
 // Load the model ahead of time whenever a take would use it.
 function warmUpIfNeeded() {
-  if (chooseMode() === 'local') Local.load(settings.device).catch(() => {});
+  if (chooseMode() === 'local') Local.load().catch(() => {});
 }
 window.addEventListener('offline', warmUpIfNeeded);
 
@@ -486,7 +477,6 @@ settingsDialog.addEventListener('close', () => {
     model: form.model.value.trim() || DEFAULTS.model,
     language: form.language.value.trim(),
     engine: form.engine.value,
-    device: form.device.value,
   });
   localStorage.setItem('settings', JSON.stringify(settings));
   toast('Settings saved');

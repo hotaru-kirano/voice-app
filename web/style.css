@@ -80,6 +80,19 @@ button { cursor: pointer; }
   user-select: text;
 }
 .text.fresh { animation: fade-in .35s ease-out; }
+/* Live on-device transcript replacing the draft while you speak. */
+.text.live::after {
+  content: '';
+  display: inline-block;
+  width: .5em;
+  height: 1em;
+  margin-left: .15em;
+  vertical-align: -.12em;
+  border-radius: 2px;
+  background: var(--live);
+  animation: blink 1s steps(2, start) infinite;
+}
+@keyframes blink { to { visibility: hidden; } }
 .surface.busy .text { opacity: .55; transition: opacity .2s; }
 
 .placeholder {
