@@ -7,6 +7,7 @@
 import * as Local from './local-stt.js';
 import * as Xai from './xai-stt.js';
 import * as Tts from './xai-tts.js';
+import * as LocalTts from './local-tts.js';
 
 const $ = (sel) => document.querySelector(sel);
 
@@ -22,6 +23,8 @@ const DEFAULTS = {
   liveText: true, // show words while speaking (on-device and xAI)
   ttsVoice: 'eve', // xAI voice for Read aloud
   ttsSpeed: 1,
+  ttsEngine: 'auto', // read aloud with: auto (xAI online, on-device offline) | local | xai
+  localVoice: 'F1', // Supertonic voice for on-device read aloud
   xaiKey: '',
 };
 
@@ -163,30 +166,76 @@ function chooseMode() {
   return cloudConfigured() ? 'cloud' : 'need-key';
 }
 
-// ---------- Read aloud (xAI) ----------
+// ---------- Read aloud ----------
+// xAI Grok voices in the cloud, or Supertonic 3 on the device.
 
 const listenBtn = $('#listen-btn');
 const LISTEN_LABELS = { idle: 'Listen', loading: 'Loading…', playing: 'Stop' };
 
-const player = new Tts.Player((state) => {
+function onTtsState(state) {
   listenBtn.dataset.state = state;
   listenBtn.textContent = LISTEN_LABELS[state];
   listenBtn.setAttribute('aria-label', state === 'idle' ? 'Listen to the draft' : 'Stop listening');
-});
+}
+const xaiPlayer = new Tts.Player(onTtsState);
+const localPlayer = new LocalTts.LocalPlayer(onTtsState);
 
-function renderListen() {
-  listenBtn.hidden = !settings.xaiKey || !currentText() || Boolean(rec);
+// Which voice engine to use, or null if none is set up.
+function ttsEngine(pref = settings.ttsEngine, xaiKey = settings.xaiKey) {
+  const local = LocalTts.isDownloaded();
+  if (pref === 'local') return local ? 'local' : null;
+  if (pref === 'xai') return xaiKey ? 'xai' : null;
+  if (xaiKey && navigator.onLine) return 'xai';
+  return local ? 'local' : xaiKey ? 'xai' : null;
 }
 
-function ttsOptions(overrides = {}) {
-  return { key: settings.xaiKey, voice: settings.ttsVoice, speed: settings.ttsSpeed, language: settings.language, ...overrides };
+function xaiTtsOptions(o = {}) {
+  return { key: settings.xaiKey, voice: settings.ttsVoice, speed: settings.ttsSpeed, language: settings.language, ...o };
+}
+
+function localTtsOptions(text, o = {}) {
+  const speed = (o.speed ?? settings.ttsSpeed) * 1.05; // Supertonic's natural pace is 1.05
+  return { voice: settings.localVoice, lang: LocalTts.languageFor(text, settings.language), ...o, speed };
+}
+
+// One player for both engines. `text` records what's being read (undefined
+// for a voice preview), so it can be stopped when the draft changes.
+const player = {
+  text: undefined,
+  active: null,
+  get state() {
+    return this.active?.state ?? 'idle';
+  },
+  async play(text, { engine = ttsEngine(), xai, local } = {}) {
+    this.stop();
+    if (!engine) throw new Error('add an xAI key, or download the on-device voice in Settings');
+    const run = (e) => {
+      this.active = e === 'local' ? localPlayer : xaiPlayer;
+      return e === 'local' ? localPlayer.play(text, localTtsOptions(text, local)) : xaiPlayer.play(text, xaiTtsOptions(xai));
+    };
+    try {
+      await run(engine);
+    } catch (err) {
+      // No connection: fall back to the on-device voice if it's there.
+      if (engine === 'xai' && err instanceof TypeError && LocalTts.isDownloaded()) return run('local');
+      throw err;
+    }
+  },
+  stop() {
+    xaiPlayer.stop();
+    localPlayer.stop();
+  },
+};
+
+function renderListen() {
+  listenBtn.hidden = !ttsEngine() || !currentText() || Boolean(rec);
 }
 
 listenBtn.addEventListener('click', () => {
   if (player.state !== 'idle') return player.stop();
   const text = currentText();
   player.text = text;
-  player.play(text, ttsOptions()).catch((err) => toast(`Couldn’t read aloud: ${err.message}`));
+  player.play(text).catch((err) => toast(`Couldn’t read aloud: ${err.message}`));
 });
 
 async function startRecording() {
@@ -616,7 +665,7 @@ function renderSaved() {
         return b;
       };
       actions.append(button('Open', 'open'), button('Copy', 'copy'));
-      if (settings.xaiKey) actions.append(button('Listen', 'listen'));
+      if (ttsEngine()) actions.append(button('Listen', 'listen'));
       const del = button('', 'delete', 'danger icon');
       del.setAttribute('aria-label', 'Delete');
       del.title = 'Delete';
@@ -656,7 +705,7 @@ $('#saved-list').addEventListener('click', async (e) => {
   } else if (action === 'listen') {
     if (player.state !== 'idle' && player.text === note.text) return player.stop();
     player.text = note.text;
-    player.play(note.text, ttsOptions()).catch((err) => toast(`Couldn’t read aloud: ${err.message}`));
+    player.play(note.text).catch((err) => toast(`Couldn’t read aloud: ${err.message}`));
   } else if (action === 'delete') {
     if (!confirm('Delete this note?')) return;
     saved = saved.filter((d) => d !== note);
@@ -677,6 +726,10 @@ const form = $('#settings-form');
 
 function openSettings() {
   fillVoices(Tts.cachedVoices());
+  if (!form.localVoice.options.length) {
+    form.localVoice.replaceChildren(...LocalTts.VOICES.map(([id, name]) => new Option(name, id)));
+  }
+  updateLocalTtsStatus();
   for (const [key, value] of Object.entries(settings)) {
     const input = form.elements[key];
     if (!input) continue;
@@ -706,9 +759,8 @@ function fillVoices(voices) {
 async function refreshVoices() {
   const key = form.xaiKey.value.trim();
   const status = $('#voice-status');
-  $('#preview-btn').disabled = !key;
   if (!key) {
-    status.textContent = 'Add an xAI API key to use Read aloud.';
+    status.textContent = 'No xAI key: only the on-device voice is available.';
     return;
   }
   status.textContent = '';
@@ -729,11 +781,19 @@ form.xaiKey.addEventListener('change', refreshVoices);
 $('#preview-btn').addEventListener('click', () => {
   // Tapping Preview again stops the preview; anything else playing is replaced.
   if (player.state !== 'idle' && player.text === undefined) return player.stop();
-  const name = form.ttsVoice.selectedOptions[0]?.text.replace(/ \(.*\)$/, '') || 'this voice';
+  const key = form.xaiKey.value.trim();
+  const engine = ttsEngine(form.ttsEngine.value, key);
+  if (!engine) {
+    $('#voice-status').textContent = form.ttsEngine.value === 'local' ? 'Download the on-device voice first.' : 'Add an xAI API key first.';
+    return;
+  }
+  const select = engine === 'local' ? form.localVoice : form.ttsVoice;
+  const name = select.selectedOptions[0]?.text.replace(/ \(.*\)$/, '') || 'this voice';
   const text = `Hi, I'm ${name}. This is how your drafts will sound.`;
+  const speed = Number(form.ttsSpeed.value);
   player.text = undefined;
   player
-    .play(text, ttsOptions({ key: form.xaiKey.value.trim(), voice: form.ttsVoice.value, speed: Number(form.ttsSpeed.value) }))
+    .play(text, { engine, xai: { key, voice: form.ttsVoice.value, speed }, local: { voice: form.localVoice.value, speed } })
     .catch((err) => ($('#voice-status').textContent = `Preview failed: ${err.message}`));
 });
 
@@ -741,6 +801,45 @@ function showProviderFields() {
   for (const el of form.querySelectorAll('.provider-fields')) el.hidden = el.dataset.provider !== form.provider.value;
 }
 form.provider.addEventListener('change', showProviderFields);
+
+// ---------- On-device voice (Supertonic) ----------
+
+function updateLocalTtsStatus() {
+  const ready = LocalTts.isDownloaded();
+  $('#localtts-status').textContent = ready
+    ? 'On-device voice downloaded. Works offline.'
+    : `On-device voice not downloaded (about ${LocalTts.APPROX_MB} MB, use Wi‑Fi).`;
+  $('#localtts-btn').textContent = ready ? 'Test' : 'Download';
+}
+
+$('#localtts-btn').addEventListener('click', async () => {
+  const btn = $('#localtts-btn');
+  const bar = $('#localtts-progress');
+  btn.disabled = true;
+  bar.hidden = false;
+  bar.max = LocalTts.APPROX_MB;
+  bar.removeAttribute('value');
+  $('#localtts-status').textContent = 'Preparing…';
+  const off = LocalTts.onProgress((loaded) => {
+    const mb = Math.round(loaded / 1e6);
+    bar.value = Math.min(mb, LocalTts.APPROX_MB);
+    $('#localtts-status').textContent = `Downloading… ${mb} / ~${LocalTts.APPROX_MB} MB`;
+  });
+  navigator.storage?.persist?.().catch(() => {});
+  try {
+    const t = performance.now();
+    const device = await LocalTts.load();
+    updateLocalTtsStatus();
+    $('#localtts-status').textContent += ` Using the ${device === 'webgpu' ? 'GPU' : 'CPU'}, ready in ${((performance.now() - t) / 1000).toFixed(1)} s.`;
+    renderListen();
+  } catch (err) {
+    $('#localtts-status').textContent = `Download failed: ${err.message}`;
+  } finally {
+    off();
+    bar.hidden = true;
+    btn.disabled = false;
+  }
+});
 
 // ---------- Offline model ----------
 
@@ -821,6 +920,8 @@ settingsDialog.addEventListener('close', () => {
     xaiKey: form.xaiKey.value.trim(),
     liveText: form.liveText.checked,
     ttsVoice: form.ttsVoice.value || Tts.DEFAULT_VOICE,
+    ttsEngine: form.ttsEngine.value,
+    localVoice: form.localVoice.value || 'F1',
     ttsSpeed: Number(form.ttsSpeed.value) || 1,
   });
   localStorage.setItem('settings', JSON.stringify(settings));

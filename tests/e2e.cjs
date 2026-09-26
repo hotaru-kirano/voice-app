@@ -383,6 +383,117 @@ async function testXai(url) {
   await browser.close();
 }
 
+// On-device read aloud (Supertonic): a stand-in for ONNX Runtime and small
+// fake model files, so the test checks the wiring without the 400 MB model.
+const STUB_ORT = `
+  export const env = { wasm: {} };
+  export class Tensor { constructor(type, data, dims) { Object.assign(this, { type, data, dims }); } }
+  const report = (what) => fetch('https://stub.test/tts/' + what);
+  export const InferenceSession = {
+    async create(buffer) {
+      const kind = new TextDecoder().decode(new Uint8Array(buffer));
+      return {
+        async run(feeds) {
+          if (kind === 'duration_predictor') return { duration: { data: [0.4] } };
+          if (kind === 'text_encoder') return { text_emb: new Tensor('float32', new Float32Array(4), [1, 4]) };
+          if (kind === 'vector_estimator') return { denoised_latent: { data: new Float32Array(feeds.noisy_latent.data.length) } };
+          report('vocoder');
+          const wav = new Float32Array(4000).map((_, i) => 0.2 * Math.sin(i / 5));
+          return { wav_tts: { data: wav } };
+        },
+      };
+    },
+  };
+`;
+
+async function testLocalTts(url) {
+  const browser = await chromium.launch();
+  const context = await browser.newContext({ serviceWorkers: 'block' });
+  const calls = [];
+  await context.route('https://cdn.jsdelivr.net/npm/onnxruntime-web@*/**', (route) =>
+    route.fulfill({ contentType: 'text/javascript', headers: { 'access-control-allow-origin': '*' }, body: STUB_ORT }));
+  await context.route('https://stub.test/**', (route) => {
+    calls.push(route.request().url());
+    route.fulfill({ status: 204, headers: { 'access-control-allow-origin': '*' } });
+  });
+  const files = {
+    'onnx/tts.json': JSON.stringify({ ae: { sample_rate: 8000, base_chunk_size: 64 }, ttl: { chunk_compress_factor: 2, latent_dim: 4 } }),
+    'onnx/unicode_indexer.json': JSON.stringify(Array.from({ length: 1000 }, (_, i) => i % 50)),
+    'voice_styles/F1.json': JSON.stringify({ style_ttl: { dims: [1, 2, 2], data: [[[1, 2], [3, 4]]] }, style_dp: { dims: [1, 2, 2], data: [[[1, 2], [3, 4]]] } }),
+    'voice_styles/M2.json': JSON.stringify({ style_ttl: { dims: [1, 2, 2], data: [[[1, 2], [3, 4]]] }, style_dp: { dims: [1, 2, 2], data: [[[1, 2], [3, 4]]] } }),
+  };
+  await context.route('https://huggingface.co/Supertone/supertonic-3/resolve/main/**', (route) => {
+    const path = route.request().url().split('/resolve/main/')[1];
+    const body = files[path] ?? (path.endsWith('.onnx') ? path.slice(5, -5) : null);
+    if (body === null) return route.fulfill({ status: 404, headers: { 'access-control-allow-origin': '*' } });
+    route.fulfill({ status: 200, headers: { 'access-control-allow-origin': '*' }, body });
+  });
+  let xaiDown = false;
+  await context.route('https://api.x.ai/v1/tts', (route) => (xaiDown ? route.abort('internetdisconnected') : route.fulfill({ status: 500, body: 'unused' })));
+  await context.addInitScript(() => {
+    if (localStorage.getItem('draft') === null) localStorage.setItem('draft', 'First sentence here. Second sentence follows.');
+    if (localStorage.getItem('settings') === null) localStorage.setItem('settings', '{}');
+  });
+  const page = await context.newPage();
+  const errors = [];
+  page.on('pageerror', (e) => errors.push(e.message));
+  await page.goto(url);
+  const vocoderRuns = () => calls.filter((c) => c.endsWith('/tts/vocoder')).length;
+
+  // 1. No xAI key and no on-device voice: nothing to read aloud with.
+  assert.ok(await page.isHidden('#listen-btn'));
+
+  // 2. Download the on-device voice from Settings.
+  await page.click('#settings-btn');
+  assert.strictEqual(await page.locator('select[name=localVoice] option').count(), 10);
+  assert.match(await page.textContent('#localtts-status'), /not downloaded/);
+  await page.click('#localtts-btn');
+  await page.waitForFunction(() => /^On-device voice downloaded/.test(document.querySelector('#localtts-status').textContent));
+  await page.selectOption('select[name=localVoice]', 'M2');
+  await page.click('#settings button[value="save"]');
+  await page.waitForFunction(() => JSON.parse(localStorage.getItem('settings')).localVoice === 'M2');
+
+  // 3. Listen reads the draft on the device, sentence by sentence.
+  assert.ok(await page.isVisible('#listen-btn'));
+  const before = vocoderRuns();
+  await page.click('#listen-btn');
+  await page.waitForFunction(() => document.querySelector('#listen-btn').textContent === 'Stop');
+  await page.waitForFunction(() => document.querySelector('#listen-btn').textContent === 'Listen', null, { timeout: 10000 });
+  assert.strictEqual(vocoderRuns() - before, 2, 'one synthesis per sentence');
+
+  // 4. Replaying the same draft reuses the audio.
+  await page.click('#listen-btn');
+  await page.waitForFunction(() => document.querySelector('#listen-btn').textContent === 'Stop');
+  await page.waitForFunction(() => document.querySelector('#listen-btn').textContent === 'Listen', null, { timeout: 10000 });
+  assert.strictEqual(vocoderRuns() - before, 2);
+
+  // 5. With an xAI key, auto uses xAI; with no connection it falls back on-device.
+  await page.evaluate(() => {
+    const s = JSON.parse(localStorage.getItem('settings'));
+    localStorage.setItem('settings', JSON.stringify({ ...s, xaiKey: 'xai-test' }));
+    localStorage.setItem('draft', 'A different draft now.');
+  });
+  await page.reload();
+  xaiDown = true;
+  const beforeFallback = vocoderRuns();
+  await page.click('#listen-btn');
+  await page.waitForFunction(() => document.querySelector('#listen-btn').textContent === 'Stop');
+  assert.strictEqual(vocoderRuns() - beforeFallback, 1);
+  await page.click('#listen-btn'); // stop
+  assert.strictEqual(await page.textContent('#listen-btn'), 'Listen');
+
+  // 6. "Always xAI" without a key hides Listen.
+  await page.evaluate(() => {
+    const s = JSON.parse(localStorage.getItem('settings'));
+    localStorage.setItem('settings', JSON.stringify({ ...s, xaiKey: '', ttsEngine: 'xai' }));
+  });
+  await page.reload();
+  assert.ok(await page.isHidden('#listen-btn'));
+
+  assert.deepStrictEqual(errors, []);
+  await browser.close();
+}
+
 (async () => {
   const server = await serve();
   const url = `http://localhost:${server.address().port}/`;
@@ -620,6 +731,7 @@ async function testXai(url) {
   await browser.close();
   await testOnDevice(url);
   await testXai(url);
+  await testLocalTts(url);
   console.log(`PASS (${requests.length} cloud transcription requests)`);
   server.close();
 })().catch((err) => {

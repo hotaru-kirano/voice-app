@@ -2,11 +2,11 @@
 // - App files: network-first, so updates show up on the next reload; falls back
 //   to the cache when offline.
 // - The on-device speech library (versioned CDN URLs): cache-first.
-// - Model weights are cached by the Moonshine library itself
-//   ("moonshine-models-v1"); this worker never touches that cache.
+// - Model weights are cached by the Moonshine library ("moonshine-models-v1")
+//   and by supertonic.js ("supertonic-3"); this worker never touches those.
 // It also adds cross-origin isolation headers so the on-device model can use
 // all CPU cores (SharedArrayBuffer), which GitHub Pages can't set itself.
-const APP_CACHE = 'voice-drafts-v18';
+const APP_CACHE = 'voice-drafts-v19';
 const CDN_CACHE = 'voice-drafts-cdn-v2';
 // Left behind by the earlier Transformers.js engine (~300 MB of model files).
 const OBSOLETE = ['transformers-cache'];
@@ -18,6 +18,9 @@ const ASSETS = [
   'local-stt.js',
   'xai-stt.js',
   'xai-tts.js',
+  'local-tts.js',
+  'tts-worker.js',
+  'supertonic.js',
   'stt-worker.js',
   'pcm-worklet.js',
   'manifest.webmanifest',

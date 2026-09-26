@@ -65,6 +65,29 @@ reads the current draft aloud with xAI's `POST /v1/tts`; tap again to stop.
 - The xAI key is shared with xAI transcription, so read-aloud also works when
   you transcribe with Groq or on-device.
 
+## Read aloud on the device (Supertonic 3)
+
+Read aloud also works offline with [Supertonic 3](https://huggingface.co/Supertone/supertonic-3)
+(31 languages, 10 voices), run by ONNX Runtime Web in a worker (`tts-worker.js`).
+
+- **Settings → Read aloud → Download** (about 400 MB, once; use Wi‑Fi).
+- **Read aloud with:** *xAI when online, on-device when offline* (default),
+  *Always on-device*, or *Always xAI*. If an xAI request can't get through, it
+  falls back to the on-device voice.
+- **On-device voice:** Female 1–5, Male 1–5. The language is picked from the
+  text (Japanese/Korean script) or the Language setting, else English.
+- **Fast start:** audio is generated sentence by sentence (a long first
+  sentence is split at a comma) and each piece plays as soon as it's ready.
+  Measured in a desktop browser on the CPU: first sound after ~3 s, and
+  generation runs faster than real time, so playback doesn't stall. After a
+  fresh app start the model first loads from storage (~8 s here).
+
+Choices made while testing:
+- The official full-precision models are used. A community int8 export is 4×
+  smaller but ran ~6× slower in ONNX Runtime Web and produced unusable audio.
+- 5 denoising steps instead of the official 8: transcribed identically (checked
+  by running the output back through speech-to-text) and ~40% faster.
+
 ## Live text on or off
 
 Settings → **Show words live while speaking** (on by default) controls live
@@ -160,6 +183,10 @@ web/            the app (this is what gets deployed)
   app.js
   xai-stt.js    xAI Grok realtime streaming (WebSocket) + batch fallback
   xai-tts.js    xAI Grok text-to-speech for Read aloud
+  local-tts.js  on-device read aloud: main-thread player
+  tts-worker.js runs Supertonic in a worker
+  supertonic.js Supertonic 3 pipeline (ONNX Runtime Web), ported from the
+                official web example
   local-stt.js  on-device transcription: main-thread wrapper
   stt-worker.js runs Moonshine v2 streaming (official WASM package) in a worker
   pcm-worklet.js  passes raw mic samples to the worker
