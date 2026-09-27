@@ -38,7 +38,7 @@ onmessage = async ({ data }) => {
         if (job !== data.id) return;
         postMessage({ type: 'chunk', id: data.id, samples, index, count, sampleRate: tts.sampleRate }, [samples.buffer]);
       });
-      postMessage({ type: 'done', id: data.id });
+      postMessage({ type: 'done', id: data.id, cancelled: job !== data.id });
     }
   } catch (err) {
     postMessage({ type: 'error', id: data.id, message: err?.message || String(err) });

@@ -8,6 +8,7 @@ import * as Local from './local-stt.js';
 import * as Xai from './xai-stt.js';
 import * as Tts from './xai-tts.js';
 import * as LocalTts from './local-tts.js';
+import * as Clips from './clips.js';
 
 const $ = (sel) => document.querySelector(sel);
 
@@ -175,13 +176,37 @@ function chooseMode() {
 const listenBtn = $('#listen-btn');
 const LISTEN_LABELS = { idle: 'Listen', loading: 'Loading…', playing: 'Stop' };
 
+const idleWaiters = [];
 function onTtsState(state) {
   listenBtn.dataset.state = state;
   listenBtn.textContent = LISTEN_LABELS[state];
   listenBtn.setAttribute('aria-label', state === 'idle' ? 'Listen to the draft' : 'Stop listening');
+  if (state === 'idle') idleWaiters.splice(0).forEach((fn) => fn());
 }
 const xaiPlayer = new Tts.Player(onTtsState);
 const localPlayer = new LocalTts.LocalPlayer(onTtsState);
+const clipPlayer = new Clips.ClipPlayer(onTtsState);
+
+// Clips being generated in the background (Play all prepares the next note).
+const pendingClips = new Map();
+
+// Generates a clip without playing it and saves it.
+function prepareClip(text, engine = ttsEngine()) {
+  if (!engine) return null;
+  const opts = engine === 'local' ? localTtsOptions(text) : xaiTtsOptions();
+  const key = Clips.keyFor(engine, text, opts);
+  if (!pendingClips.has(key)) {
+    const job = (async () => {
+      if (await Clips.get(key)) return;
+      const blob = engine === 'local' ? await LocalTts.render(text, opts) : await Tts.synthesize(text, opts);
+      if (blob) await Clips.put(key, blob);
+    })()
+      .catch(() => {})
+      .finally(() => pendingClips.delete(key));
+    pendingClips.set(key, job);
+  }
+  return pendingClips.get(key);
+}
 
 // Which voice engine to use, or null if none is set up.
 function ttsEngine(pref = settings.ttsEngine, xaiKey = settings.xaiKey) {
@@ -209,12 +234,30 @@ const player = {
   get state() {
     return this.active?.state ?? 'idle';
   },
+  // Resolves once the audio is fully generated (it may still be playing).
   async play(text, { engine = ttsEngine(), xai, local } = {}) {
     this.stop();
     if (!engine) throw new Error('add an xAI key, or download the on-device voice in Settings');
-    const run = (e) => {
+    const token = (this.token = {});
+    const run = async (e) => {
+      const opts = e === 'local' ? localTtsOptions(text, local) : xaiTtsOptions(xai);
+      const key = Clips.keyFor(e, text, opts);
+      // A clip that's being prepared right now: wait for it rather than
+      // generating it twice.
+      if (pendingClips.has(key)) {
+        onTtsState('loading');
+        await pendingClips.get(key);
+        if (token !== this.token) return;
+      }
+      const saved = await Clips.get(key);
+      if (token !== this.token) return;
+      if (saved) {
+        this.active = clipPlayer;
+        return clipPlayer.play(saved);
+      }
+      const onClip = (blob) => Clips.put(key, blob);
       this.active = e === 'local' ? localPlayer : xaiPlayer;
-      return e === 'local' ? localPlayer.play(text, localTtsOptions(text, local)) : xaiPlayer.play(text, xaiTtsOptions(xai));
+      return this.active.play(text, { ...opts, onClip });
     };
     try {
       await run(engine);
@@ -225,8 +268,14 @@ const player = {
     }
   },
   stop() {
+    this.token = null;
     xaiPlayer.stop();
     localPlayer.stop();
+    clipPlayer.stop();
+  },
+  // Resolves when playback ends or is stopped.
+  untilIdle() {
+    return this.state === 'idle' ? Promise.resolve() : new Promise((r) => idleWaiters.push(r));
   },
 };
 
@@ -235,6 +284,7 @@ function renderListen() {
 }
 
 listenBtn.addEventListener('click', () => {
+  if (playlist) return stopPlayAll();
   if (player.state !== 'idle') return player.stop();
   const text = currentText();
   player.text = text;
@@ -242,7 +292,7 @@ listenBtn.addEventListener('click', () => {
 });
 
 async function startRecording() {
-  player.stop();
+  stopPlayAll();
   const mode = chooseMode();
   if (mode === 'need-key') {
     toast('Add your API key, or download the offline model');
@@ -676,10 +726,24 @@ $('#copy-all-btn').addEventListener('click', () =>
   copyText(allNotesText(), `Copied ${saved.length} note${saved.length === 1 ? '' : 's'}`),
 );
 
+// Combines all notes (oldest first, blank line between) into a single note,
+// e.g. once every section of a long piece is recorded.
+$('#merge-notes-btn').addEventListener('click', () => {
+  const n = saved.length;
+  if (n < 2 || !confirm(`Merge all ${n} notes into one, oldest first? The separate notes will be replaced by the merged note.`)) return;
+  if (playlist) stopPlayAll();
+  saved = [{ id: crypto.randomUUID?.() ?? String(Date.now()), text: allNotesText(), at: Date.now() }];
+  storeSaved();
+  renderSaved();
+  render();
+  toast(`Merged ${n} notes into one`);
+});
+
 // Clears every note, e.g. after copying a finished long draft, to start the next.
 $('#clear-notes-btn').addEventListener('click', () => {
   const n = saved.length;
   if (!n || !confirm(`Delete all ${n} note${n === 1 ? '' : 's'}? This can’t be undone, so use Copy all first if you need them.`)) return;
+  if (playlist) stopPlayAll();
   saved = [];
   storeSaved();
   renderSaved();
@@ -690,7 +754,9 @@ $('#clear-notes-btn').addEventListener('click', () => {
 function renderSaved() {
   $('#saved-empty').hidden = saved.length > 0;
   $('#copy-all-btn').hidden = saved.length === 0;
+  queueMicrotask(renderPlayAll);
   $('#clear-notes-btn').hidden = saved.length === 0;
+  $('#merge-notes-btn').hidden = saved.length < 2;
   $('#saved-list').replaceChildren(
     ...saved.map((d) => {
       const li = document.createElement('li');
@@ -745,11 +811,13 @@ $('#saved-list').addEventListener('click', async (e) => {
   } else if (action === 'copy') {
     copyText(note.text);
   } else if (action === 'listen') {
-    if (player.state !== 'idle' && player.text === note.text) return player.stop();
+    if (playlist) stopPlayAll();
+    else if (player.state !== 'idle' && player.text === note.text) return player.stop();
     player.text = note.text;
     player.play(note.text).catch((err) => toast(`Couldn’t read aloud: ${err.message}`));
   } else if (action === 'delete') {
     if (!confirm('Delete this note?')) return;
+    if (playlist) stopPlayAll();
     saved = saved.filter((d) => d !== note);
     storeSaved();
     renderSaved();
@@ -758,7 +826,60 @@ $('#saved-list').addEventListener('click', async (e) => {
 });
 
 savedDialog.addEventListener('close', () => {
-  if (player.text !== currentText()) player.stop();
+  // Play all keeps going with Notes closed; a single note's Listen stops.
+  if (!playlist && player.text !== currentText()) player.stop();
+});
+
+// ---------- Play all ----------
+// Reads every note aloud, oldest first. Saved clips play instantly; others are
+// generated (streaming, so they start fast). While one note plays, the next
+// note's clip is prepared in the background so there's no wait in between.
+
+let playlist = null; // { index, count } while playing
+
+function renderPlayAll() {
+  const btn = $('#play-all-btn');
+  btn.hidden = saved.length === 0 || !ttsEngine();
+  btn.textContent = playlist ? `Stop (${playlist.index + 1}/${playlist.count})` : 'Play all';
+  btn.toggleAttribute('data-active', Boolean(playlist));
+  const current = playlist ? [...saved].reverse()[playlist.index]?.id : null;
+  for (const li of $('#saved-list').children) li.classList.toggle('playing', li.dataset.id === current);
+}
+
+function stopPlayAll() {
+  playlist = null;
+  player.stop();
+  renderPlayAll();
+}
+
+async function playAll() {
+  const notes = [...saved].reverse();
+  const run = (playlist = { index: 0, count: notes.length });
+  player.text = undefined; // not tied to the draft on screen
+  try {
+    for (let i = 0; i < notes.length && playlist === run; i++) {
+      run.index = i;
+      renderPlayAll();
+      await player.play(notes[i].text);
+      if (playlist !== run) break;
+      // Generation of this note is done: prepare the next while this one plays.
+      if (notes[i + 1]) prepareClip(notes[i + 1].text);
+      await player.untilIdle();
+    }
+  } catch (err) {
+    if (playlist === run) toast(`Couldn’t read aloud: ${err.message}`);
+  } finally {
+    if (playlist === run) {
+      playlist = null;
+      renderPlayAll();
+    }
+  }
+}
+
+$('#play-all-btn').addEventListener('click', () => {
+  if (playlist) return stopPlayAll();
+  if (rec || busy || !saved.length) return;
+  playAll();
 });
 
 

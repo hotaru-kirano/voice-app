@@ -44,6 +44,11 @@ async function request(text, { key, voice, speed, language }, signal) {
   return res;
 }
 
+// The whole clip in one go, without playing it (to prepare the next note).
+export async function synthesize(text, opts) {
+  return (await request(text, opts)).blob();
+}
+
 const canStream = () =>
   typeof MediaSource !== 'undefined' && MediaSource.isTypeSupported('audio/mpeg');
 
@@ -102,6 +107,7 @@ export class Player {
       // Keep the finished clip for replays. Swapping the source mid-playback
       // would restart it, so only do that once it has finished or been stopped.
       const finished = new Blob([blob], { type });
+      opts.onClip?.(finished);
       if (this.startedFor === id && this.state === 'playing' && !this.audio.ended) {
         this.audio.addEventListener('ended', () => current() && this.cache(key, finished), { once: true });
         this.pendingCache = () => this.cache(key, finished);

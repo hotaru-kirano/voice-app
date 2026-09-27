@@ -149,6 +149,7 @@
     <form method="dialog">
       <div class="sheet-head">
         <h2>Notes</h2>
+        <button type="button" id="play-all-btn" class="btn copy-all" title="Play every note, oldest first">Play all</button>
         <button type="button" id="copy-all-btn" class="btn copy-all" title="Copy every note, oldest first, as one text">Copy all</button>
         <button value="close" class="icon-btn" aria-label="Close">
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M19 6.4 17.6 5 12 10.6 6.4 5 5 6.4 10.6 12 5 17.6 6.4 19 12 13.4 17.6 19 19 17.6 13.4 12z"/></svg>
@@ -157,7 +158,8 @@
       <p id="saved-empty" class="muted small">No notes yet. When you’re happy with a draft, tap Save.</p>
       <ul id="saved-list" class="saved-list"></ul>
       <div class="actions">
-        <button type="button" id="clear-notes-btn" class="btn danger">Delete all notes</button>
+        <button type="button" id="clear-notes-btn" class="btn danger" title="Delete every note">Delete all</button>
+        <button type="button" id="merge-notes-btn" class="btn" title="Combine every note, oldest first, into one note">Merge into one</button>
       </div>
     </form>
   </dialog>

@@ -36,8 +36,11 @@ Progressive Web App, so it installs to your home screen.
   there's also **Copy**, **Listen** (with an xAI key) and delete.
 - **Long documents from notes.** Record and save one section at a time, then
   use **Copy all** (Notes screen) to copy every note in the order you saved
-  them, separated by blank lines. **Delete all notes** (bottom of the Notes
-  screen, asks first) clears them for the next one.
+  them, separated by blank lines. **Play all** reads them aloud in the same
+  order: saved clips play instantly, others are generated (the next note is
+  prepared while the current one plays), and clips are kept on the device so
+  replays don't regenerate. **Merge into one** combines them into a single
+  note, and **Delete all** clears them for the next one (both ask first).
 - **Clear** (top left) blanks the draft. If it isn't saved as a note, it asks
   first.
 - **Paste** (top left) puts the clipboard text on the screen as the draft. Tap

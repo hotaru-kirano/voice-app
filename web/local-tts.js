@@ -71,6 +71,35 @@ export async function load(device = 'auto') {
   return used;
 }
 
+// 16-bit mono WAV, for saving a finished clip.
+export function toWav(chunks, sampleRate) {
+  const length = chunks.reduce((n, c) => n + c.length, 0);
+  const buf = new ArrayBuffer(44 + length * 2);
+  const v = new DataView(buf);
+  const str = (o, s) => [...s].forEach((c, i) => v.setUint8(o + i, c.charCodeAt(0)));
+  str(0, 'RIFF'); v.setUint32(4, 36 + length * 2, true); str(8, 'WAVE'); str(12, 'fmt ');
+  v.setUint32(16, 16, true); v.setUint16(20, 1, true); v.setUint16(22, 1, true); v.setUint32(24, sampleRate, true);
+  v.setUint32(28, sampleRate * 2, true); v.setUint16(32, 2, true); v.setUint16(34, 16, true); str(36, 'data');
+  v.setUint32(40, length * 2, true);
+  let o = 44;
+  for (const c of chunks) {
+    for (let i = 0; i < c.length; i++, o += 2) v.setInt16(o, Math.max(-1, Math.min(1, c[i])) * 0x7fff, true);
+  }
+  return new Blob([buf], { type: 'audio/wav' });
+}
+
+// The whole clip as a WAV, without playing it (to prepare the next note).
+export async function render(text, opts) {
+  const chunks = [];
+  let sampleRate = 44100;
+  const { cancelled } = await call({ type: 'speak', text, device: opts.device, opts: { voice: opts.voice, lang: opts.lang, speed: opts.speed } }, (msg) => {
+    sampleRate = msg.sampleRate;
+    chunks.push(msg.samples);
+  }).done;
+  if (cancelled) return null; // another request took over the worker
+  return toWav(chunks, sampleRate);
+}
+
 // ---------- Player ----------
 
 export class LocalPlayer {
@@ -144,15 +173,17 @@ export class LocalPlayer {
       last = this.enqueue(msg.samples, sampleRate);
       if (this.state !== 'playing') this.setState('playing');
     });
+    let result;
     try {
-      await this.job.done;
+      result = await this.job.done;
     } catch (err) {
       if (token === this.token) this.setState('idle');
       throw err;
     }
-    if (token !== this.token) return;
+    if (token !== this.token || result?.cancelled) return;
     this.cacheKey = key;
     this.cached = { chunks, sampleRate };
+    opts.onClip?.(toWav(chunks, sampleRate));
     this.generated = true;
     if (last) this.finishWhen(last, token);
     else this.setState('idle');

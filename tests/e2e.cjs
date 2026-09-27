@@ -379,6 +379,34 @@ async function testXai(url) {
   await page.click('#mic-btn');
   await page.waitForSelector('#mic-btn:not(.busy)[aria-pressed="false"]');
 
+  // 8. Play all reads the notes oldest first; each clip is generated once
+  //    (the next one is prepared while the current one plays) and then reused.
+  await page.evaluate(() => localStorage.setItem('saved', JSON.stringify([
+    { id: 'beta', text: 'Beta section.', at: 2 },
+    { id: 'alpha', text: 'Alpha section.', at: 1 },
+  ])));
+  await page.reload();
+  const ttsBefore = tts.length;
+  await page.click('#saved-btn');
+  await page.click('#play-all-btn');
+  await page.waitForSelector('#saved-list li[data-id=alpha].playing');
+  assert.match(await page.textContent('#play-all-btn'), /^Stop \(1\/2\)$/);
+  await page.waitForSelector('#saved-list li[data-id=beta].playing', { timeout: 10000 });
+  await page.waitForFunction(() => document.querySelector('#play-all-btn').textContent === 'Play all', null, { timeout: 10000 });
+  assert.deepStrictEqual(tts.slice(ttsBefore).map((r) => r.text), ['Alpha section.', 'Beta section.']);
+  // Again: everything comes from saved clips.
+  await page.click('#play-all-btn');
+  await page.waitForSelector('#saved-list li[data-id=beta].playing', { timeout: 10000 });
+  await page.waitForFunction(() => document.querySelector('#play-all-btn').textContent === 'Play all', null, { timeout: 10000 });
+  assert.strictEqual(tts.length - ttsBefore, 2, 'no new requests the second time');
+  // Stop works mid-way.
+  await page.click('#play-all-btn');
+  await page.waitForSelector('#saved-list li.playing');
+  await page.click('#play-all-btn');
+  assert.strictEqual(await page.textContent('#play-all-btn'), 'Play all');
+  assert.strictEqual(await page.locator('#saved-list li.playing').count(), 0);
+  await page.click('#saved button[value=close]');
+
   assert.deepStrictEqual(errors, []);
   await browser.close();
 }
@@ -481,6 +509,29 @@ async function testLocalTts(url) {
   assert.strictEqual(vocoderRuns() - beforeFallback, 1);
   await page.click('#listen-btn'); // stop
   assert.strictEqual(await page.textContent('#listen-btn'), 'Listen');
+
+  // 5b. Play all on the device: oldest first, each note generated once.
+  await page.evaluate(() => {
+    const s = JSON.parse(localStorage.getItem('settings'));
+    localStorage.setItem('settings', JSON.stringify({ ...s, xaiKey: '' }));
+    localStorage.setItem('saved', JSON.stringify([
+      { id: 'two', text: 'Second note.', at: 2 },
+      { id: 'one', text: 'First note.', at: 1 },
+    ]));
+  });
+  await page.reload();
+  const beforeAll = vocoderRuns();
+  await page.click('#saved-btn');
+  await page.click('#play-all-btn');
+  await page.waitForSelector('#saved-list li[data-id=one].playing');
+  await page.waitForSelector('#saved-list li[data-id=two].playing', { timeout: 10000 });
+  await page.waitForFunction(() => document.querySelector('#play-all-btn').textContent === 'Play all', null, { timeout: 10000 });
+  assert.strictEqual(vocoderRuns() - beforeAll, 2);
+  await page.click('#play-all-btn');
+  await page.waitForSelector('#saved-list li[data-id=two].playing', { timeout: 10000 });
+  await page.waitForFunction(() => document.querySelector('#play-all-btn').textContent === 'Play all', null, { timeout: 10000 });
+  assert.strictEqual(vocoderRuns() - beforeAll, 2, 'second Play all uses saved clips');
+  await page.click('#saved button[value=close]');
 
   // 6. "Always xAI" without a key hides Listen.
   await page.evaluate(() => {
@@ -689,6 +740,26 @@ async function testLocalTts(url) {
     navigator.clipboard.writeText = window.__clipboardWrite;
     document.execCommand = window.__execCommand;
   });
+  // Merge into one: asks first, then replaces the notes with one combined note.
+  const mergeBackup = await page.evaluate(() => localStorage.getItem('saved'));
+  const askedMerge = new Promise((r) => page.once('dialog', (d) => { d.dismiss(); r(); }));
+  await page.click('#merge-notes-btn');
+  await askedMerge;
+  assert.strictEqual(await page.locator('#saved-list li').count(), 3);
+  page.once('dialog', (d) => d.accept());
+  await page.click('#merge-notes-btn');
+  await page.waitForFunction(() => document.querySelectorAll('#saved-list li').length === 1);
+  assert.strictEqual(
+    await page.textContent('#saved-list li .saved-text'),
+    'Kyoto, May. One: set a budget. Two: book flights.\n\nSection two.\n\nSection three.',
+  );
+  assert.ok(await page.isHidden('#merge-notes-btn'), 'nothing left to merge');
+  assert.strictEqual(await page.textContent('#saved-count'), '1');
+  await page.evaluate((b) => localStorage.setItem('saved', b), mergeBackup);
+  await page.reload();
+  await page.click('#saved-btn');
+  await page.waitForSelector('#saved[open]');
+
   // Delete all asks first; cancelling keeps everything.
   const backup = await page.evaluate(() => localStorage.getItem('saved'));
   const askedDelete = new Promise((r) => page.once('dialog', (d) => { d.dismiss(); r(); }));

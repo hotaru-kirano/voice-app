@@ -215,8 +215,12 @@ button { cursor: pointer; }
 .sheet-head > h2 { flex: 1; }
 .sheet-head h2 { margin-right: auto; }
 #clear-notes-btn { color: var(--live); margin-right: auto; }
-.sheet-head .copy-all { min-height: 36px; padding: 4px 14px; }
+.sheet-head .copy-all { min-height: 36px; padding: 4px 10px; white-space: nowrap; }
+#saved .actions { flex-wrap: wrap; }
+#saved .actions .btn { white-space: nowrap; }
 .saved-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 10px; }
+.saved-list li.playing { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
+#play-all-btn[data-active] { color: var(--accent); border-color: currentColor; }
 .saved-list li {
   border: 1px solid var(--border);
   border-radius: 12px;

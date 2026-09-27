@@ -6,7 +6,7 @@
 //   and by supertonic.js ("supertonic-3"); this worker never touches those.
 // It also adds cross-origin isolation headers so the on-device model can use
 // all CPU cores (SharedArrayBuffer), which GitHub Pages can't set itself.
-const APP_CACHE = 'voice-drafts-v21';
+const APP_CACHE = 'voice-drafts-v23';
 const CDN_CACHE = 'voice-drafts-cdn-v2';
 // Left behind by the earlier Transformers.js engine (~300 MB of model files).
 const OBSOLETE = ['transformers-cache'];
@@ -18,6 +18,7 @@ const ASSETS = [
   'local-stt.js',
   'xai-stt.js',
   'xai-tts.js',
+  'clips.js',
   'local-tts.js',
   'tts-worker.js',
   'supertonic.js',
