@@ -407,6 +407,19 @@ async function testXai(url) {
   assert.strictEqual(await page.locator('#saved-list li.playing').count(), 0);
   await page.click('#saved button[value=close]');
 
+  // 9. Deleting notes deletes their saved clips (other clips are kept).
+  const clipCount = () => page.evaluate(async () => (await (await caches.open('tts-clips-v2')).keys()).length);
+  const allClips = await clipCount();
+  assert.ok(allClips >= 3, `expected the draft's and both notes' clips, got ${allClips}`);
+  await page.click('#saved-btn');
+  page.once('dialog', (d) => d.accept());
+  await page.click('#saved-list li[data-id=beta] [data-action=delete]');
+  await page.waitForFunction(async (n) => (await (await caches.open('tts-clips-v2')).keys()).length === n - 1, allClips);
+  page.once('dialog', (d) => d.accept());
+  await page.click('#clear-notes-btn');
+  await page.waitForFunction(async (n) => (await (await caches.open('tts-clips-v2')).keys()).length === n - 2, allClips);
+  await page.click('#saved button[value=close]');
+
   assert.deepStrictEqual(errors, []);
   await browser.close();
 }

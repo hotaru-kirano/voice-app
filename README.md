@@ -41,6 +41,8 @@ Progressive Web App, so it installs to your home screen.
   prepared while the current one plays), and clips are kept on the device so
   replays don't regenerate. **Merge into one** combines them into a single
   note, and **Delete all** clears them for the next one (both ask first).
+  Deleting a note, deleting all, or merging also deletes the saved clips of the
+  notes that went away.
 - **Clear** (top left) blanks the draft. If it isn't saved as a note, it asks
   first.
 - **Paste** (top left) puts the clipboard text on the screen as the draft. Tap

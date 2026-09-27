@@ -732,6 +732,7 @@ $('#merge-notes-btn').addEventListener('click', () => {
   const n = saved.length;
   if (n < 2 || !confirm(`Merge all ${n} notes into one, oldest first? The separate notes will be replaced by the merged note.`)) return;
   if (playlist) stopPlayAll();
+  Clips.removeTexts(saved.map((d) => d.text)); // the sections' clips aren't needed any more
   saved = [{ id: crypto.randomUUID?.() ?? String(Date.now()), text: allNotesText(), at: Date.now() }];
   storeSaved();
   renderSaved();
@@ -744,6 +745,7 @@ $('#clear-notes-btn').addEventListener('click', () => {
   const n = saved.length;
   if (!n || !confirm(`Delete all ${n} note${n === 1 ? '' : 's'}? This can’t be undone, so use Copy all first if you need them.`)) return;
   if (playlist) stopPlayAll();
+  Clips.removeTexts(saved.map((d) => d.text)); // their read-aloud clips go too
   saved = [];
   storeSaved();
   renderSaved();
@@ -819,6 +821,7 @@ $('#saved-list').addEventListener('click', async (e) => {
     if (!confirm('Delete this note?')) return;
     if (playlist) stopPlayAll();
     saved = saved.filter((d) => d !== note);
+    Clips.removeTexts([note.text]);
     storeSaved();
     renderSaved();
     render();

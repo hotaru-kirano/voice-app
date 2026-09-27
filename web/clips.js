@@ -2,13 +2,21 @@
 // over notes) doesn't generate the audio a second time. Kept in the Cache API,
 // so clips survive the app being closed. The oldest are dropped past MAX.
 
-const CACHE = 'tts-clips-v1';
+const CACHE = 'tts-clips-v2';
 const MAX = 80;
+// v1 filed clips without their text, so they couldn't be deleted with a note.
+caches.delete('tts-clips-v1').catch(() => {});
 
+async function sha(s) {
+  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(s));
+  return [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, '0')).join('');
+}
+
+// Clips are filed under their text, so every clip of a text (any engine,
+// voice or speed) can be found and deleted together.
 async function url(key) {
-  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(key));
-  const hex = [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, '0')).join('');
-  return `https://clips.invalid/${hex}`;
+  const text = JSON.parse(key)[1];
+  return `https://clips.invalid/${await sha(text)}/${await sha(key)}`;
 }
 
 // The same text, engine, voice, speed and language always gives the same key.
@@ -34,6 +42,17 @@ export async function put(key, blob) {
     await cache.put(u, new Response(blob, { headers: { 'Content-Type': blob.type || 'audio/mpeg' } }));
     const keys = await cache.keys();
     for (const old of keys.slice(0, Math.max(0, keys.length - MAX))) await cache.delete(old);
+  } catch {}
+}
+
+// Deletes every clip of these texts.
+export async function removeTexts(texts) {
+  try {
+    const cache = await caches.open(CACHE);
+    const prefixes = await Promise.all(texts.map(async (t) => `https://clips.invalid/${await sha(t)}/`));
+    for (const req of await cache.keys()) {
+      if (prefixes.some((p) => req.url.startsWith(p))) await cache.delete(req);
+    }
   } catch {}
 }
 
