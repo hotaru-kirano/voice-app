@@ -667,6 +667,28 @@ async function testLocalTts(url) {
     await page.evaluate(() => navigator.clipboard.readText()),
     'Kyoto, May. One: set a budget. Two: book flights.\n\nSection two.\n\nSection three.',
   );
+  // The confirmation shows on top of the Notes screen, not hidden behind it.
+  assert.strictEqual(await page.evaluate(() => document.querySelector('#toast').parentElement.id), 'saved');
+  assert.strictEqual(await page.textContent('#toast'), 'Copied 3 notes');
+  // If the browser refuses clipboard access, the text is shown selected to copy by hand.
+  await page.evaluate(() => {
+    window.__clipboardWrite = navigator.clipboard.writeText;
+    navigator.clipboard.writeText = () => Promise.reject(new Error('denied'));
+    window.__execCommand = document.execCommand;
+    document.execCommand = () => false;
+  });
+  await page.click('#copy-all-btn');
+  await page.waitForSelector('#copy-dialog[open]');
+  assert.strictEqual(await page.inputValue('#copy-text'), 'Kyoto, May. One: set a budget. Two: book flights.\n\nSection two.\n\nSection three.');
+  assert.strictEqual(await page.evaluate(() => {
+    const t = document.querySelector('#copy-text');
+    return t.value.slice(t.selectionStart, t.selectionEnd).length === t.value.length;
+  }), true, 'text is selected');
+  await page.click('#copy-dialog button[value=close]');
+  await page.evaluate(() => {
+    navigator.clipboard.writeText = window.__clipboardWrite;
+    document.execCommand = window.__execCommand;
+  });
   // Delete all asks first; cancelling keeps everything.
   const backup = await page.evaluate(() => localStorage.getItem('saved'));
   const askedDelete = new Promise((r) => page.once('dialog', (d) => { d.dismiss(); r(); }));

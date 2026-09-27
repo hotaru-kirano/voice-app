@@ -123,6 +123,9 @@ function setStatus(text, isError = false) {
 let toastTimer;
 function toast(text) {
   const el = $('#toast');
+  // Show it above any open dialog, which would otherwise cover it.
+  const dialog = [...document.querySelectorAll('dialog[open]')].pop();
+  (dialog ?? document.body).append(el);
   el.textContent = text;
   el.hidden = false;
   clearTimeout(toastTimer);
@@ -559,14 +562,35 @@ $('#retry-btn').addEventListener('click', () => {
   transcribeTake({ blob: failedTake, mode: mode === 'local' ? 'local' : 'cloud' });
 });
 
-$('#copy-btn').addEventListener('click', async () => {
+// Copies text to the clipboard. Tries the Clipboard API, then the older
+// execCommand way, and if the browser refuses both, shows the text selected so
+// it can be copied by hand.
+async function copyText(text, done = 'Copied') {
   try {
-    await navigator.clipboard.writeText(currentText());
-    toast('Copied');
-  } catch {
-    toast('Copy failed');
-  }
-});
+    await navigator.clipboard.writeText(text);
+    return toast(done);
+  } catch {}
+  const host = [...document.querySelectorAll('dialog[open]')].pop() ?? document.body;
+  const area = document.createElement('textarea');
+  area.value = text;
+  area.setAttribute('readonly', '');
+  area.style.cssText = 'position:fixed;top:0;left:0;opacity:0;';
+  host.append(area);
+  area.select();
+  let ok = false;
+  try {
+    ok = document.execCommand('copy');
+  } catch {}
+  area.remove();
+  if (ok) return toast(done);
+  const dialog = $('#copy-dialog');
+  $('#copy-text').value = text;
+  dialog.showModal();
+  $('#copy-text').focus();
+  $('#copy-text').select();
+}
+
+$('#copy-btn').addEventListener('click', () => copyText(currentText()));
 
 // Blanks the draft. Notes are kept.
 $('#clear-btn').addEventListener('click', () => {
@@ -648,14 +672,9 @@ function allNotesText() {
   return [...saved].reverse().map((d) => d.text.trim()).join('\n\n');
 }
 
-$('#copy-all-btn').addEventListener('click', async () => {
-  try {
-    await navigator.clipboard.writeText(allNotesText());
-    toast(`Copied ${saved.length} note${saved.length === 1 ? '' : 's'}`);
-  } catch {
-    toast('Copy failed');
-  }
-});
+$('#copy-all-btn').addEventListener('click', () =>
+  copyText(allNotesText(), `Copied ${saved.length} note${saved.length === 1 ? '' : 's'}`),
+);
 
 // Clears every note, e.g. after copying a finished long draft, to start the next.
 $('#clear-notes-btn').addEventListener('click', () => {
@@ -724,12 +743,7 @@ $('#saved-list').addEventListener('click', async (e) => {
     setDraft(note.text);
     savedDialog.close();
   } else if (action === 'copy') {
-    try {
-      await navigator.clipboard.writeText(note.text);
-      toast('Copied');
-    } catch {
-      toast('Copy failed');
-    }
+    copyText(note.text);
   } else if (action === 'listen') {
     if (player.state !== 'idle' && player.text === note.text) return player.stop();
     player.text = note.text;

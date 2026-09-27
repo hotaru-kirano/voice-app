@@ -6,7 +6,7 @@
 //   and by supertonic.js ("supertonic-3"); this worker never touches those.
 // It also adds cross-origin isolation headers so the on-device model can use
 // all CPU cores (SharedArrayBuffer), which GitHub Pages can't set itself.
-const APP_CACHE = 'voice-drafts-v20';
+const APP_CACHE = 'voice-drafts-v21';
 const CDN_CACHE = 'voice-drafts-cdn-v2';
 // Left behind by the earlier Transformers.js engine (~300 MB of model files).
 const OBSOLETE = ['transformers-cache'];
@@ -58,7 +58,10 @@ function isolate(res) {
 
 async function appFile(req) {
   try {
-    const res = await fetch(req);
+    // Always check with the server (GitHub Pages lets browsers reuse files for
+    // 10 minutes), so the page and its scripts never come from different
+    // versions.
+    const res = await fetch(req, { cache: 'no-cache' });
     if (res.ok) {
       const copy = res.clone();
       caches.open(APP_CACHE).then((c) => c.put(req, copy));
