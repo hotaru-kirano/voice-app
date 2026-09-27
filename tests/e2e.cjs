@@ -649,6 +649,45 @@ async function testLocalTts(url) {
   await page.click('#clear-btn');
   assert.strictEqual(await text(), '');
 
+  // 10a. Copy all joins every note, oldest first, with a blank line between.
+  await page.evaluate(() => {
+    const saved = JSON.parse(localStorage.getItem('saved'));
+    // Newest first, like the app stores them.
+    localStorage.setItem('saved', JSON.stringify([
+      { id: 'n3', text: 'Section three.', at: 3 },
+      { id: 'n2', text: 'Section two.\n', at: 2 },
+      ...saved,
+    ]));
+  });
+  await page.reload();
+  await page.click('#saved-btn');
+  await page.waitForSelector('#saved[open]');
+  await page.click('#copy-all-btn');
+  assert.strictEqual(
+    await page.evaluate(() => navigator.clipboard.readText()),
+    'Kyoto, May. One: set a budget. Two: book flights.\n\nSection two.\n\nSection three.',
+  );
+  // Delete all asks first; cancelling keeps everything.
+  const backup = await page.evaluate(() => localStorage.getItem('saved'));
+  const askedDelete = new Promise((r) => page.once('dialog', (d) => { d.dismiss(); r(); }));
+  await page.click('#clear-notes-btn');
+  await askedDelete;
+  assert.strictEqual(await page.locator('#saved-list li').count(), 3);
+  page.once('dialog', (d) => d.accept());
+  await page.click('#clear-notes-btn');
+  await page.waitForFunction(() => !document.querySelector('#saved-list li'));
+  assert.ok(await page.isVisible('#saved-empty'));
+  assert.ok(await page.isHidden('#copy-all-btn'));
+  assert.ok(await page.isHidden('#clear-notes-btn'));
+  assert.strictEqual(await page.evaluate(() => localStorage.getItem('saved')), '[]');
+  await page.click('#saved button[value=close]');
+  assert.ok(await page.isHidden('#saved-count'));
+  // Put the first note back for the rest of the test.
+  await page.evaluate((b) => {
+    localStorage.setItem('saved', JSON.stringify(JSON.parse(b).filter((n) => !['n2', 'n3'].includes(n.id))));
+  }, backup);
+  await page.reload();
+
   // 10. Notes survive a reload and can be opened, copied and deleted.
   await page.reload();
   assert.strictEqual(await page.textContent('#saved-count'), '1');
@@ -684,9 +723,9 @@ async function testLocalTts(url) {
   assert.match(requests.at(-1).body, /name="prompt"\r\n\r\nAn article paragraph to rephrase\./);
   // Pasting over an unsaved draft asks first.
   await page.evaluate(() => navigator.clipboard.writeText('Second paste'));
-  let asked = new Promise((r) => page.once('dialog', (d) => { d.dismiss(); r(); }));
+  const askedPaste = new Promise((r) => page.once('dialog', (d) => { d.dismiss(); r(); }));
   await page.click('#paste-btn');
-  await asked;
+  await askedPaste;
   assert.strictEqual(await text(), 'My own take on the paragraph.');
   page.once('dialog', (d) => d.accept());
   await page.click('#paste-btn');

@@ -642,8 +642,36 @@ $('#save-btn').addEventListener('click', () => {
 const savedDialog = $('#saved');
 const savedDate = new Intl.DateTimeFormat(undefined, { dateStyle: 'medium', timeStyle: 'short' });
 
+// All notes as one text, in the order they were saved (oldest first), with a
+// blank line between them.
+function allNotesText() {
+  return [...saved].reverse().map((d) => d.text.trim()).join('\n\n');
+}
+
+$('#copy-all-btn').addEventListener('click', async () => {
+  try {
+    await navigator.clipboard.writeText(allNotesText());
+    toast(`Copied ${saved.length} note${saved.length === 1 ? '' : 's'}`);
+  } catch {
+    toast('Copy failed');
+  }
+});
+
+// Clears every note, e.g. after copying a finished long draft, to start the next.
+$('#clear-notes-btn').addEventListener('click', () => {
+  const n = saved.length;
+  if (!n || !confirm(`Delete all ${n} note${n === 1 ? '' : 's'}? This can’t be undone, so use Copy all first if you need them.`)) return;
+  saved = [];
+  storeSaved();
+  renderSaved();
+  render();
+  toast('All notes deleted');
+});
+
 function renderSaved() {
   $('#saved-empty').hidden = saved.length > 0;
+  $('#copy-all-btn').hidden = saved.length === 0;
+  $('#clear-notes-btn').hidden = saved.length === 0;
   $('#saved-list').replaceChildren(
     ...saved.map((d) => {
       const li = document.createElement('li');

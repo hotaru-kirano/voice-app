@@ -211,7 +211,11 @@ button { cursor: pointer; }
   font: inherit;
   color: inherit;
 }
-.sheet-head { display: flex; align-items: center; justify-content: space-between; }
+.sheet-head { display: flex; align-items: center; gap: 8px; }
+.sheet-head > h2 { flex: 1; }
+.sheet-head h2 { margin-right: auto; }
+#clear-notes-btn { color: var(--live); margin-right: auto; }
+.sheet-head .copy-all { min-height: 36px; padding: 4px 14px; }
 .saved-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 10px; }
 .saved-list li {
   border: 1px solid var(--border);
